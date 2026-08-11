@@ -18,6 +18,8 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [10](#bug-10--step-spent-neurons-without-metering-them) | `/step` spent neurons without metering them | 🟡 Guard bypass | Fixed |
 | [11](#bug-11--navigation-boilerplate-was-being-embedded) | Navigation boilerplate was being embedded | 🟡 Quality/cost | Fixed |
 | [12](#bug-12--model-invented-non-existent-source-urls) | Model invented non-existent source URLs | 🟡 Quality | **Fixed & measured** |
+| [13](#bug-13--report-cites-iteration-numbers-as-if-they-were-sources) | Report cites iteration numbers as if they were sources | 🟠 Traceability | **Open** |
+| [14](#bug-14--url-variants-bypass-dedupe-and-are-re-fetched) | URL variants bypass dedupe and are re-fetched | 🟡 Quality/cost | **Open** |
 
 ---
 
@@ -326,3 +328,74 @@ That trade is deliberate. A fabricated URL costs a wasted iteration plus a faile
 fetch; a missed real URL costs only the discovery. But it does blunt the loop's
 main advantage, so `MAX_SOURCE_DEPTH=0` versus grounding is now a genuine choice
 rather than grounding being strictly better.
+
+---
+
+## Bug 13 — Report cites iteration numbers as if they were sources
+
+**Severity:** 🟠 Traceability · **Status:** **Open** (found in run `76fb1813`)
+
+**How it showed up.** The final report of run `76fb1813` cites claims as `[1]`,
+`[3]`, `[5]`, `[6]`, `[10]` — with no legend anywhere in the document. Run
+`0d5ed883`, on the *old* report prompt, printed full URLs inline
+(`https://smallbizai.au/...`). The rewrite made citations look more scholarly and
+made them **unresolvable**.
+
+**Root cause.** Two changes met badly. `synthesise()` in `src/workflow.ts` builds
+the findings payload as:
+
+```ts
+const body = findings.map((f) => `[${f.n}] ${f.finding}`).join('\n\n');
+```
+
+so the only bracketed identifiers the model can see are **iteration numbers**.
+The rewritten `REPORT_SYSTEM` in `src/prompt.ts` then demands *"Cite the source
+URL for each substantive claim."* No URL is present in the payload, so the model
+cites the identifiers that are — and they point at iterations, not sources.
+
+**Impact.** Every citation in the report is a dead reference. Resolving one means
+cross-referencing `/state?run=` by hand. This is a **regression against the old
+prompt**, and it partly undercuts the grounding work in bug #12: citations that
+cannot be checked are not much better than citations that are wrong.
+
+**Fix (identified, not yet applied).** Carry the URL into the synthesis payload
+so the model has something real to cite — `recentFindings()` already selects
+`source_url`. Not deployed: a run was in flight, and deploying mid-run is bug #4.
+
+**Lesson.** A prompt that demands a field the payload does not contain will not
+produce an error. It produces a confident substitute.
+
+---
+
+## Bug 14 — URL variants bypass dedupe and are re-fetched
+
+**Severity:** 🟡 Quality/cost · **Status:** **Open** (found in run `76fb1813`)
+
+**How it showed up.** Run `76fb1813` fetched the same pages twice under URLs
+differing only in punctuation:
+
+| Seed | Model-added duplicate | Chunks each |
+|---|---|---|
+| `smallbizai.au/australian-ai-companies-...-2026/` | same URL **without** trailing slash | 41 |
+| `www.startmate.com/portfolio` | `startmate.com/portfolio` (no `www.`) | 9 |
+| `www.startupdaily.net/` | `startupdaily.net/` (no `www.`) | pending |
+| `www.innovationaus.com/` | `innovationaus.com/` (no `www.`) | pending |
+
+**Impact.** 3 of the 5 sources the model added were pages already in memory.
+Roughly **25% of a 12-iteration fetch budget** went to re-reading known content,
+and smallbizai alone stored **82 duplicate vectors** where 41 would do — inflating
+recall competition as well as embedding cost.
+
+**Root cause.** The bug #12 fix filters proposed URLs against links *observed on
+the page*, which correctly kills fabrication. But real pages genuinely link to
+themselves in both forms, and the dedupe check compares **raw URL strings**, so
+`example.com/x` and `www.example.com/x/` are two distinct rows.
+
+**Fix (identified, not yet applied).** Normalise before the dedupe comparison:
+lowercase the host, strip a leading `www.`, strip a trailing slash, drop the
+fragment. Keep the original URL for display.
+
+**Lesson.** Bug #12's own write-up already listed *"duplicate hostnames of
+existing seeds (`smallbizai.au/`, `startmate.com/portfolio` without `www`)"* as a
+symptom — then the fix addressed only the fabrication half. **A symptom noted in
+a bug report is not a symptom covered by its fix.**
