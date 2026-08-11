@@ -1,0 +1,79 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "research-loop",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Lets the Worker serve liverun.html at /live from the same file on disk.
+  "rules": [
+    { "type": "Text", "globs": ["**/*.html"], "fallthrough": true }
+  ],
+
+  "observability": {
+    "enabled": true
+  },
+
+  "ai": {
+    "binding": "AI"
+  },
+
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "research-memory"
+    }
+  ],
+
+  "workflows": [
+    {
+      "name": "research-loop",
+      "binding": "LOOP",
+      "class_name": "ResearchLoop"
+    }
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "research-log",
+      "database_id": "0fc433f6-4b99-48cb-b2f4-8e3694413fcd"
+    }
+  ],
+
+  "triggers": {
+    // Watchdog: restarts runs stalled for >2h with work still queued.
+    "crons": ["*/30 * * * *"]
+  },
+
+  "vars": {
+    // Pacing. 18 min keeps ~79 iterations/day inside the free 10k neuron/day
+    // budget. Lower this and you will pay past the free tier. See README §4.1.
+    "ITERATION_INTERVAL": "18 minutes",
+
+    // Swap to @cf/meta/llama-3.1-8b-instruct for ~2x throughput, lower quality.
+    "REASON_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+
+    // 384 dims. MUST match the Vectorize index dimensions.
+    "EMBED_MODEL": "@cf/baai/bge-small-en-v1.5",
+
+    // Bounded by SUBREQUESTS, not steps. A resumed instance accumulates
+    // subrequests across iterations in one invocation; run 19ac529b died at
+    // n=11 with "Too many subrequests by single Worker invocation" (50 on free).
+    // Each generation is a fresh invocation budget, so keep this low.
+    "ITERATIONS_PER_GEN": "8",
+
+    "MAX_FETCH_BYTES": "262144",
+    "RECALL_TOP_K": "8",
+
+    // 0 disables model-proposed sources (seeds only).
+    "MAX_SOURCE_DEPTH": "2",
+
+    // HARD SPEND STOP. Neurons per UTC day across all runs; the loop terminates
+    // with reason='budget-exhausted' when reached. 10000 = the free daily
+    // allocation, so at this value a Paid account never pays for Workers AI.
+    // Cloudflare budget alerts do NOT cap usage — this is the only real stop.
+    // Set 0 for unlimited (you are then trusting maxIterations alone).
+    "DAILY_NEURON_BUDGET": "10000"
+  }
+}

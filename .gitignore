@@ -1,0 +1,16 @@
+node_modules/
+.wrangler/
+.dev.vars
+.env
+dist/
+*.log
+
+# Local machine paths and personal permission grants
+.claude/settings.local.json
+
+# Files carrying the worker URL or Cloudflare account ID — kept local only
+README.md
+HANDOFF.md
+AI_Research.md
+benchmark/BENCHMARK.md
+liverun.html
