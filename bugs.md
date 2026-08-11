@@ -20,6 +20,8 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [12](#bug-12--model-invented-non-existent-source-urls) | Model invented non-existent source URLs | 🟡 Quality | **Fixed & measured** |
 | [13](#bug-13--report-cites-iteration-numbers-as-if-they-were-sources) | Report cites iteration numbers as if they were sources | 🟠 Traceability | **Open** |
 | [14](#bug-14--url-variants-bypass-dedupe-and-are-re-fetched) | URL variants bypass dedupe and are re-fetched | 🟡 Quality/cost | **Open** |
+| [15](#bug-15--large-html-ingest-is-over-the-cpu-limit-and-only-passed-on-burst-allowance) | Large HTML ingest is over the CPU limit and only passed on burst allowance | 🔴 Fatal (intermittent) | **Open** |
+| [16](#bug-16--source-validation-confirmed-extractability-not-topic) | Source validation confirmed extractability, not topic | 🟠 Research quality | **Open** |
 
 ---
 
@@ -399,3 +401,86 @@ fragment. Keep the original URL for display.
 existing seeds (`smallbizai.au/`, `startmate.com/portfolio` without `www`)"* as a
 symptom — then the fix addressed only the fabrication half. **A symptom noted in
 a bug report is not a symptom covered by its fix.**
+
+---
+
+## Bug 15 — Large HTML ingest is over the CPU limit and only passed on burst allowance
+
+**Severity:** 🔴 Fatal (intermittent) · **Status:** **Open** (found in run `98adcf63`)
+
+**How it showed up.** Run `98adcf63` failed at `ingest:11` with
+`Error: Worker exceeded CPU time limit.` — three attempts, 10 s and 20 s apart,
+all identical. The page was
+`en.wikipedia.org/wiki/Science_and_technology_in_New_Zealand`. Probing that exact
+URL minutes earlier had **succeeded**, which is what made the failure look like
+per-invocation accumulation (bug #1's pattern) rather than what it is.
+
+**The measurement that settled it.** `wrangler tail --format json` reports
+`cpuTime` per request. Probing five pages:
+
+| Request | cpuTime | Outcome |
+|---|---|---|
+| `/step` probe — NZ Wikipedia (1.84 MB raw) | **241 ms** | ❌ `exceededCpu` |
+| `/step` probe — 3 other large HTML pages | **20 ms** each | ❌ `exceededCpu` |
+| `/step` probe — Callaghan (70 KB) | **11 ms** | ✅ ok |
+| `/state`, `/usage` | 1–3 ms | ✅ ok |
+
+The enforced ceiling sits **between 11 ms and 20 ms** — the Free plan's 10 ms CPU
+limit. `smallbizai` fails here at 20 ms yet ingested cleanly at iteration 1 of run
+`76fb1813`. The same page, either side of the limit, minutes apart.
+
+**Root cause.** HTML extraction costs 20–241 ms CPU. The limit is 10 ms. Every
+successful HTML ingest this project has performed was inside burst allowance, not
+inside budget. `README` §4.2 already stated HTML ingest needs a Workers Paid plan;
+the loop ran it anyway and *appeared* to work for 40+ iterations across four runs.
+
+**Not accumulation.** gen-0 of the failing run completed 8 HTML iterations. The
+per-page cost is what varies (~7× between pages), so `ITERATIONS_PER_GEN` is not
+the lever — source selection is.
+
+**Fix (identified).** Prefer plain-text sources. Wikipedia's `?action=raw`
+endpoint returns `text/x-wiki` and parses in the ~1 ms class — and yields **more**
+text than the HTML path (60,000 chars vs 42,826 for `Economy_of_New_Zealand`).
+Small HTML pages (≤70 KB) stay within budget and need no change.
+
+**Lesson.** **Intermittent success is not headroom.** A limit you pass most of the
+time is a limit you have not measured. The repo already recorded that the same
+page measured 229/594/644 ms across runs — that variance *was* the warning, and it
+was read as noise rather than as proximity to a ceiling.
+
+---
+
+## Bug 16 — Source validation confirmed extractability, not topic
+
+**Severity:** 🟠 Research quality · **Status:** **Open**
+
+**How it showed up.** Chasing bug #15, `?action=raw` on
+`Science_and_technology_in_New_Zealand` returned **95 characters**:
+
+```
+#REDIRECT [[New_Zealand#Science_and_technology]] {{Redirect category shell|
+```
+
+It is a **redirect**. The HTML path silently followed it and parsed the entire
+**New Zealand country article** — 1.84 MB, the largest and most CPU-expensive page
+in the set, and the direct cause of bug #15's failure.
+`Science_and_technology_in_Australia` is the same: 46 chars of wikitext, redirecting
+to the Australia article.
+
+**Impact.** `AI_Research.md` §3 and §5 list both as science-and-technology sources
+with confident extraction figures (35,951 ch / 29 chunks and 35,112 ch / 29
+chunks). Those numbers are real but they measure **general country articles**. Two
+of the 14 seeds were not what the brief said they were, and one of them broke a run.
+
+**Root cause.** Validation asked *"does this URL return substantive extractable
+text through the real pipeline?"* — the right question, and it passed. It did not
+ask *"is the returned text about the topic claimed?"*
+
+**Fix (identified).** When probing, check the extracted text against the source's
+stated purpose, not just its length. `?action=raw` makes redirects visible in one
+line, so probe the raw endpoint first even when ingesting HTML.
+
+**Lesson.** CLAUDE.md §5 says to test every source through the actual pipeline.
+That caught the bot-blocked half of the seed list. It did not catch a source that
+works perfectly and is about something else. **Extractability and relevance are
+two separate validations, and passing the first one loudly hides the second.**
