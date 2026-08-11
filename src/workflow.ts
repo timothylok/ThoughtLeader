@@ -107,13 +107,14 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
                 error: msg,
                 excerpts: [],
                 links: [],
+                neurons: 0,
               };
             }
 
             // Embedding and storage failures are transient infrastructure
             // errors, so they propagate and let the step's retry policy work.
             const pieces = chunk(doc.text);
-            const stored = await remember(
+            const { stored, neurons } = await remember(
               env,
               runId,
               pieces.map((text, i) => ({
@@ -130,6 +131,7 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
               url: source.url,
               sourceId: source.id,
               chunks: stored,
+              neurons,
               bytes: doc.bytes,
               truncated: doc.truncated,
               error: null,
@@ -139,10 +141,14 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
           },
         );
 
-        // 3. Recall the most relevant memory for the goals.
-        const recalled = await step.do(`recall:${n}`, async (): Promise<Recalled[]> => {
-          return await recall(env, runId, recallQuery(topic, goals, lastProgress), topK);
-        });
+        // 3. Recall the most relevant memory for the goals. The query embedding
+        //    is a real AI call and used to go entirely uncounted (bugs.md #17).
+        const recalled = await step.do(
+          `recall:${n}`,
+          async (): Promise<{ items: Recalled[]; neurons: number }> => {
+            return await recall(env, runId, recallQuery(topic, goals, lastProgress), topK);
+          },
+        );
 
         // 4. Reason.
         const reasoning = await step.do(
@@ -154,7 +160,7 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
               topic,
               goals,
               ingested.excerpts,
-              recalled,
+              recalled.items,
               prior,
               ingested.error ? null : ingested.url,
             );
@@ -171,7 +177,7 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
         const recorded = await step.do(`record:${n}`, async () => {
           const findingId = await recordFinding(env.DB, runId, n, ingested.url, reasoning);
 
-          await remember(env, runId, [
+          const remembered = await remember(env, runId, [
             {
               key: findingKey(n),
               text: reasoning.finding,
@@ -195,10 +201,14 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
             console.log(`[${runId}] n=${n} rejected ungrounded URLs: ${rejected.join(', ')}`);
           }
 
-          // Reason calls are ~92% of spend and reported exactly. Embeddings are
-          // estimated: bge-small is 1,841 neurons/M tokens and chunks average
-          // ~350 tokens, so ~0.64 neurons each. Close enough for a spend guard.
-          const spent = await addNeurons(env.DB, reasoning.neurons + ingested.chunks * 0.64);
+          // EVERY AI call this iteration made, each from its own exact
+          // `usage.neurons`. Estimating the embeddings and omitting the recall
+          // query made the guard read 21% low (bugs.md #17), which let actual
+          // usage pass the free allocation while `/usage` still showed headroom.
+          const spent = await addNeurons(
+            env.DB,
+            reasoning.neurons + ingested.neurons + recalled.neurons + remembered.neurons,
+          );
 
           return { findingId, enqueued, spentToday: spent };
         });
@@ -223,7 +233,7 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
         }
 
         console.log(
-          `[${runId}] n=${n} chunks=${ingested.chunks} recalled=${recalled.length} ` +
+          `[${runId}] n=${n} chunks=${ingested.chunks} recalled=${recalled.items.length} ` +
             `enqueued=${recorded.enqueued} neurons=${reasoning.neurons.toFixed(1)} ` +
             `spentToday=${recorded.spentToday.toFixed(0)}/${budget || '∞'}` +
             `${ingested.error ? ` err=${ingested.error}` : ''}`,
@@ -235,9 +245,12 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
 
       if (terminal) {
         await step.do(`report:${generation}`, async () => {
-          const report = await this.synthesise(runId, topic, goals);
+          // max_tokens 1200 — the largest single generation in a run, and it was
+          // counted nowhere at all before bugs.md #17.
+          const { report, neurons } = await this.synthesise(runId, topic, goals);
           await finishRun(env.DB, runId, terminal!, report);
-          return { terminal, reportChars: report.length };
+          const spentToday = await addNeurons(env.DB, neurons);
+          return { terminal, reportChars: report.length, neurons, spentToday };
         });
         return;
       }
@@ -269,9 +282,13 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
   }
 
   /** Final synthesis. Pulls the run's findings straight from D1, in order. */
-  private async synthesise(runId: string, topic: string, goals: string[]): Promise<string> {
+  private async synthesise(
+    runId: string,
+    topic: string,
+    goals: string[],
+  ): Promise<{ report: string; neurons: number }> {
     const findings = await recentFindings(this.env.DB, runId, 60);
-    if (findings.length === 0) return 'No findings were recorded.';
+    if (findings.length === 0) return { report: 'No findings were recorded.', neurons: 0 };
 
     // The URL must travel with the finding. Without it the report prompt still
     // demands a citation and the model supplies one anyway — either the bare
@@ -289,8 +306,11 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
       ],
       max_tokens: 1200,
       temperature: 0.3,
-    })) as { response?: string };
+    })) as { response?: string; usage?: { neurons?: number } };
 
-    return (res.response ?? '').trim() || body;
+    return {
+      report: (res.response ?? '').trim() || body,
+      neurons: res.usage?.neurons ?? 0,
+    };
   }
 }

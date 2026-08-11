@@ -17,6 +17,7 @@ import {
   requestStop,
   clearStop,
   failRun,
+  finishRun,
   neuronsToday,
   usageHistory,
   addNeurons,
@@ -171,7 +172,13 @@ async function start(request: Request, env: Env): Promise<Response> {
   // status='running' with work queued, which the watchdog would resurrect
   // hours later into a run nobody started. Fail it closed instead.
   let instance: WorkflowInstance | null = null;
-  if (!body.dryRun) {
+  if (body.dryRun) {
+    // A dry run seeds sources and starts nothing — which leaves precisely the
+    // zombie described above: status='running', sources pending, no instance.
+    // The watchdog resurrects exactly that shape after 2h, so a throwaway dry
+    // run would launch itself later and spend neurons (bugs.md #18). Close it.
+    await finishRun(env.DB, runId, 'stopped', null);
+  } else {
     try {
       instance = await env.LOOP.create({
         id: `run-${runId}-gen-0`,
@@ -226,7 +233,11 @@ async function state(env: Env, runId: string): Promise<Response> {
 
 async function search(env: Env, runId: string, q: string): Promise<Response> {
   if (!runId || !q) return json({ error: 'run and q parameters required' }, 400);
-  return json({ runId, query: q, matches: await recall(env, runId, q, 10) });
+  // Embedding the query is an AI call, so it is metered like any other
+  // (bugs.md #10, #17). Cheap, but a guard with exceptions is not a guard.
+  const { items, neurons } = await recall(env, runId, q, 10);
+  const spentToday = await addNeurons(env.DB, neurons);
+  return json({ runId, query: q, matches: items, neurons, spentToday });
 }
 
 /**
@@ -244,11 +255,19 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
 
   const aiProbe = (body as { ai?: string }).ai;
   if (aiProbe) {
-    const raw = await env.AI.run(env.REASON_MODEL, {
+    const raw = (await env.AI.run(env.REASON_MODEL, {
       messages: [{ role: 'user', content: aiProbe }],
       max_tokens: 200,
+    })) as { usage?: { neurons?: number } };
+    // This debug path spends real neurons. Unmetered, it is a hole in the guard
+    // exactly like /step was before bug #10 — close every path to the resource.
+    const spentToday = await addNeurons(env.DB, raw.usage?.neurons ?? 0);
+    return json({
+      model: env.REASON_MODEL,
+      rawShape: Object.keys(raw as object),
+      raw,
+      spentToday,
     });
-    return json({ model: env.REASON_MODEL, rawShape: Object.keys(raw as object), raw });
   }
 
   if (probe) {
@@ -292,12 +311,13 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
   let fresh: string[] = [];
   let observedLinks: string[] = [];
   let ingestError: string | null = null;
+  let embedNeurons = 0;
   try {
     const doc = await fetchSource(source.url, num(env.MAX_FETCH_BYTES, 262_144));
     const pieces = chunk(doc.text);
     fresh = pieces.slice(0, 6);
     observedLinks = doc.links;
-    chunks = await remember(
+    const stored = await remember(
       env,
       runId,
       pieces.map((text, i) => ({
@@ -308,6 +328,8 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
         n,
       })),
     );
+    chunks = stored.stored;
+    embedNeurons += stored.neurons;
     await markSourceResult(env.DB, source.id, chunks, null);
   } catch (e) {
     ingestError = String(e).slice(0, 300);
@@ -320,22 +342,32 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
     recallQuery(topic, goals, ''),
     num(env.RECALL_TOP_K, 8),
   );
+  embedNeurons += recalled.neurons;
   const prior = await recentFindings(env.DB, runId, 6);
 
   const res = (await env.AI.run(env.REASON_MODEL, {
-    messages: buildPrompt(topic, goals, fresh, recalled, prior, ingestError ? null : source.url),
+    messages: buildPrompt(
+      topic,
+      goals,
+      fresh,
+      recalled.items,
+      prior,
+      ingestError ? null : source.url,
+    ),
     max_tokens: 700,
     temperature: 0.4,
   })) as { response?: unknown; usage?: { neurons?: number } };
 
   const reasoning = parseReasoning(res.response);
-  // /step spends real neurons, so it must count against the same daily budget —
-  // otherwise testing is a blind spot in the spend guard.
-  const spentToday = await addNeurons(env.DB, (res.usage?.neurons ?? 0) + chunks * 0.64);
   await recordFinding(env.DB, runId, n, source.url, reasoning);
-  await remember(env, runId, [
+  const remembered = await remember(env, runId, [
     { key: findingKey(n), text: reasoning.finding, sourceUrl: source.url, type: 'finding', n },
   ]);
+  embedNeurons += remembered.neurons;
+  // /step spends real neurons, so it must count against the same daily budget —
+  // otherwise testing is a blind spot in the spend guard. Every embed is counted
+  // from its own `usage.neurons`, never estimated (bugs.md #17).
+  const spentToday = await addNeurons(env.DB, (res.usage?.neurons ?? 0) + embedNeurons);
   // Same grounding as the workflow: only URLs actually seen on a fetched page.
   // Without this, /step would silently bypass the bug #12 fix.
   const { accepted, rejected } = selectNextSources(reasoning.newSources, observedLinks);
@@ -347,7 +379,7 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
     source: source.url,
     ingestError,
     chunksStored: chunks,
-    recalled: recalled.length,
+    recalled: recalled.items.length,
     reasoning,
     enqueued,
     linksObserved: observedLinks.length,

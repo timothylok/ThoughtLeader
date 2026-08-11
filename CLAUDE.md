@@ -104,11 +104,39 @@ The test: could you name the exact command that proved this source works?
 - Assume platform-level guards do not exist. Cloudflare budget alerts do not cap usage
   and fire a day late; the only real stop is in application code.
 - Close every path to the guarded resource. The spend guard here initially missed the
-  debug endpoint and the cron watchdog — both could spend freely.
-- **Never deploy while a run is in flight.** A deploy resets the Durable Object behind a
-  live Workflow. Check `/state` or `wrangler workflows instances list` first.
+  debug endpoint, the cron watchdog, the report call, the recall embedding and a `dryRun`
+  that left a row the watchdog would resurrect — every one of them could spend freely.
+- Meter from the provider's own usage field, never from arithmetic. Estimating embeddings
+  and omitting two call sites made the spend guard read **21% low**, so real usage passed
+  the free allocation while `/usage` still showed headroom. **A guard tested only against
+  the number it computes itself will always pass** — reconcile against the provider's
+  figure at least once.
 - Treat every write inside a retryable step as if it will run three times. Partial
   execution is the normal case.
+
+### 7.1 No code deployment during a live run
+
+**`wrangler deploy` while a run is in flight is never acceptable.** A deploy resets the
+Durable Object behind the live Workflow, and the catch-all can write a terminal status to
+a run that is still healthy (bugs.md #4). This has now cost time twice, so it is its own
+rule rather than a bullet:
+
+```sh
+# Gate. Not a print. Exits non-zero when anything is running.
+curl -s "$WORKER_URL/state" \
+  | grep -q '"status": "running"' && { echo "RUN IN FLIGHT — refusing to deploy"; exit 1; }
+wrangler deploy
+```
+
+- **The check must abort, not report.** The second violation happened *after* running the
+  check: it printed `runs in flight: 1`, and the deploy was chained with `&&` so it ran
+  anyway. Observing a blocker and proceeding is worse than never checking, because it
+  produces a log line that looks like diligence.
+- Verify with `wrangler workflows instances list` too. A `dryRun` leaves
+  `status='running'` with **no instance**, so `/state` alone can both raise a false alarm
+  and — via the watchdog — hide a real one.
+- If a deploy is genuinely urgent mid-run, `POST /stop` first and let the run reach its
+  assess step. Losing an iteration beats corrupting the run's recorded state.
 
 ## 8. Right Tool For The Phase
 

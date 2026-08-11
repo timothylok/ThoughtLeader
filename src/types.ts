@@ -48,6 +48,8 @@ export interface IngestResult {
   url: string | null;
   sourceId: number | null;
   chunks: number;
+  /** Exact `usage.neurons` from embedding those chunks — never an estimate (bugs.md #17). */
+  neurons: number;
   bytes: number;
   truncated: boolean;
   error: string | null;

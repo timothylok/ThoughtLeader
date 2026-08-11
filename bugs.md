@@ -18,11 +18,12 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [10](#bug-10--step-spent-neurons-without-metering-them) | `/step` spent neurons without metering them | 🟡 Guard bypass | Fixed |
 | [11](#bug-11--navigation-boilerplate-was-being-embedded) | Navigation boilerplate was being embedded | 🟡 Quality/cost | Fixed |
 | [12](#bug-12--model-invented-non-existent-source-urls) | Model invented non-existent source URLs | 🟡 Quality | **Fixed & measured** |
-| [13](#bug-13--report-cites-iteration-numbers-as-if-they-were-sources) | Report cites iteration numbers as if they were sources | 🟠 Traceability | **Open** |
-| [14](#bug-14--url-variants-bypass-dedupe-and-are-re-fetched) | URL variants bypass dedupe and are re-fetched | 🟡 Quality/cost | **Open** |
+| [13](#bug-13--report-cites-iteration-numbers-as-if-they-were-sources) | Report cites iteration numbers as if they were sources | 🟠 Traceability | Fixed, **unverified** |
+| [14](#bug-14--url-variants-bypass-dedupe-and-are-re-fetched) | URL variants bypass dedupe and are re-fetched | 🟡 Quality/cost | **Fixed & verified** |
 | [15](#bug-15--large-html-ingest-is-over-the-cpu-limit-and-only-passed-on-burst-allowance) | Large HTML ingest is over the CPU limit and only passed on burst allowance | 🔴 Fatal (intermittent) | **Open** |
 | [16](#bug-16--source-validation-confirmed-extractability-not-topic) | Source validation confirmed extractability, not topic | 🟠 Research quality | **Open** |
-| [17](#bug-17--the-hard-spend-stop-undercounts-by-21-and-let-the-free-allocation-run-out) | The hard spend stop undercounts by ~21% and let the free allocation run out | 🔴 Guard failure | **Open** |
+| [17](#bug-17--the-hard-spend-stop-undercounts-by-21-and-let-the-free-allocation-run-out) | The hard spend stop undercounts by ~21% and let the free allocation run out | 🔴 Guard failure | Fixed, **unverified** |
+| [18](#bug-18--dryrun-leaves-a-run-the-watchdog-will-start-for-real) | `dryRun` leaves a run the watchdog will start for real | 🟠 Latent spend | **Fixed** |
 
 ---
 
@@ -515,7 +516,7 @@ two separate validations, and passing the first one loudly hides the second.**
 
 ## Bug 17 — The hard spend stop undercounts by ~21% and let the free allocation run out
 
-**Severity:** 🔴 Guard failure · **Status:** **Open** (found 2026-08-11)
+**Severity:** 🔴 Guard failure · **Status:** **Fixed, verification pending** (found 2026-08-11)
 
 **How it showed up.** A 1-iteration verification run failed immediately:
 
@@ -551,10 +552,28 @@ the meter undercounts, **actual usage crossed the free allocation while the guar
 read 79%** — on Paid, that is the exact moment billing starts. The guard did not
 merely mis-report; it failed at its one job.
 
-**Fix (identified, not yet applied).** Return `usage.neurons` from `memory.ts`
-embed calls and add it; meter the `synthesise()` call the same way reasoning is
-metered. Every Workers AI response carries exact usage — no estimate is needed
-anywhere.
+**Fix (applied).** `embed()` now returns `{ vectors, neurons }` from the response's
+own `usage.neurons`; `remember()` and `recall()` propagate it; `synthesise()`
+returns its neurons and the `report` step meters them. All arithmetic is gone.
+Audited every `AI.run` call site in the codebase:
+
+| Call site | Metered at |
+|---|---|
+| `memory.ts:45` embed | returned to every caller |
+| `workflow.ts:167` reason | `workflow.ts:208`, with ingest + recall + remember |
+| `workflow.ts:299` synthesise | `workflow.ts:252` |
+| `index.ts:341` `/step` reason | `index.ts:363`, with all embeds |
+| `index.ts:251` `{"ai":…}` debug probe | `index.ts:257` — **was leaking too** |
+| `/search` query embed | `index.ts:232` — **was leaking too** |
+
+The audit found two further unmetered call sites beyond the three that caused the
+failure. The `probe` path spends nothing (no AI call), so the ~20 source probes run
+during the bug #15 investigation were genuinely free.
+
+**Verification pending.** The fix cannot be confirmed until the allocation resets at
+UTC midnight: the test is to run a full iteration and reconcile `/usage` against the
+Cloudflare-side figure. Until that comparison is done this is *believed* fixed, which
+is exactly the status that let the original bug through.
 
 **Lesson.** CLAUDE.md §6 says *prefer measured values to arithmetic*, and §7 says
 *build and verify the kill switch before the thing it stops*. Both were followed for
@@ -562,3 +581,44 @@ the reasoning path and quietly abandoned for the other three call sites. **A gua
 tested only against the number it computes itself will always pass.** The test that
 would have caught this is comparing `/usage` to the Cloudflare-side figure — which
 is precisely what bug #10's fix was supposed to make unnecessary.
+
+---
+
+## Bug 18 — `dryRun` leaves a run the watchdog will start for real
+
+**Severity:** 🟠 Latent spend · **Status:** **Fixed**
+
+**How it showed up.** A `dryRun` smoke test for bug #14 left run `de733a13` sitting at
+`status='running'`, 0/1 iterations, 1 source pending — with **no workflow instance
+behind it** (`wrangler workflows instances list` shows no `run-de733a13-gen-0`).
+
+**Root cause.** `/start` creates the run row, then skips `LOOP.create()` when
+`dryRun` is set, and never marks the row terminal. The watchdog in `scheduled()`
+selects on exactly that shape:
+
+```sql
+SELECT ... FROM runs WHERE status = 'running' AND updated_at < <now - 2h>
+```
+
+with `pendingSourceCount > 0` and `iterations < max_iterations`. **Two hours after
+any dry run, the watchdog would launch it as a real run and spend neurons on a
+throwaway test.** `POST /stop` does not help: it sets a flag read at the next
+assess step, and there is no instance to read it.
+
+**Root cause, restated less kindly.** The comment directly above the `dryRun`
+branch already describes this exact failure —
+
+> *"if instance creation then fails, that row is a zombie: status='running' with
+> work queued, which the watchdog would resurrect hours later into a run nobody
+> started. Fail it closed instead."*
+
+Bug #8 fixed that for the *create-failure* path and left the `dryRun` path,
+three lines away, producing the same zombie by design.
+
+**Fix.** `finishRun(env.DB, runId, 'stopped', null)` on the `dryRun` branch, so a
+dry run ends terminal and the watchdog ignores it.
+
+**Lesson.** Bug #8's fix was verified against the path that had failed, not against
+the invariant it was protecting. The invariant is *"no row may sit in `running`
+without an instance"* — and checking that invariant across all writers would have
+found this immediately. **Fix the invariant, not the incident.**

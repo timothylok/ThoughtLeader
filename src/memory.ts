@@ -31,13 +31,23 @@ function namespaceFor(runId: string): string {
   return runId.slice(0, 64);
 }
 
-export async function embed(env: Env, texts: string[]): Promise<number[][]> {
-  if (texts.length === 0) return [];
+/**
+ * Every Workers AI response carries exact `usage.neurons`. Report it rather than
+ * estimating: the old `chunks * 0.64` arithmetic, plus two call sites that counted
+ * nothing at all, made the spend guard read 21% low and let the free allocation
+ * run out while `/usage` showed 79% (bugs.md #17).
+ */
+export async function embed(
+  env: Env,
+  texts: string[],
+): Promise<{ vectors: number[][]; neurons: number }> {
+  if (texts.length === 0) return { vectors: [], neurons: 0 };
   const res = (await env.AI.run(env.EMBED_MODEL, { text: texts })) as {
     data: number[][];
+    usage?: { neurons?: number };
   };
   if (!res?.data?.length) throw new Error('embedding model returned no data');
-  return res.data;
+  return { vectors: res.data, neurons: res.usage?.neurons ?? 0 };
 }
 
 export interface MemoryItem {
@@ -58,10 +68,14 @@ export interface MemoryItem {
  * Metadata carries the source text so recall needs no second round-trip to D1.
  * Vectorize allows 10KiB metadata per vector; chunks are ~1.4KB, well inside it.
  */
-export async function remember(env: Env, runId: string, items: MemoryItem[]): Promise<number> {
-  if (items.length === 0) return 0;
+export async function remember(
+  env: Env,
+  runId: string,
+  items: MemoryItem[],
+): Promise<{ stored: number; neurons: number }> {
+  if (items.length === 0) return { stored: 0, neurons: 0 };
 
-  const vectors = await embed(
+  const { vectors, neurons } = await embed(
     env,
     items.map((i) => i.text),
   );
@@ -80,7 +94,7 @@ export async function remember(env: Env, runId: string, items: MemoryItem[]): Pr
   }));
 
   await env.VECTORIZE.upsert(payload);
-  return payload.length;
+  return { stored: payload.length, neurons };
 }
 
 /** Chunk key: stable per source, so re-ingesting overwrites only itself. */
@@ -96,9 +110,10 @@ export async function recall(
   query: string,
   topK: number,
   type?: MemoryType,
-): Promise<Recalled[]> {
-  const [vector] = await embed(env, [query]);
-  if (!vector) return [];
+): Promise<{ items: Recalled[]; neurons: number }> {
+  const { vectors, neurons } = await embed(env, [query]);
+  const vector = vectors[0];
+  if (!vector) return { items: [], neurons };
 
   const res = await env.VECTORIZE.query(vector, {
     topK,
@@ -107,7 +122,7 @@ export async function recall(
     ...(type ? { filter: { type } } : {}),
   });
 
-  return (res.matches ?? []).map((m) => {
+  const items = (res.matches ?? []).map((m) => {
     const meta = (m.metadata ?? {}) as Partial<MemoryMetadata>;
     return {
       text: String(meta.text ?? ''),
@@ -116,4 +131,6 @@ export async function recall(
       type: (meta.type as MemoryType) ?? 'chunk',
     };
   });
+
+  return { items, neurons };
 }
