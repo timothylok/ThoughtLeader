@@ -1,7 +1,7 @@
 // @ts-expect-error - bundled as text via the Text rule in wrangler.jsonc
 import LIVE_HTML from '../liverun.html';
 import { num, type Env, type StartRequest } from './types.ts';
-import { fetchSource, chunk, selectNextSources } from './ingest.ts';
+import { fetchSource, chunk, selectNextSources, normalizeUrl } from './ingest.ts';
 import { recall, remember, chunkKey, findingKey } from './memory.ts';
 import { buildPrompt, parseReasoning, recallQuery } from './prompt.ts';
 import {
@@ -140,8 +140,20 @@ async function start(request: Request, env: Env): Promise<Response> {
 
   const topic = typeof body.topic === 'string' ? body.topic.trim() : '';
   const goals = Array.isArray(body.goals) ? body.goals.filter((g) => typeof g === 'string') : [];
+  // Seeds go through the SAME normaliser as model-proposed URLs. Without this,
+  // seeds are stored verbatim while proposals are canonicalised, so
+  // UNIQUE(run_id, url) compares two different forms and never collides —
+  // `www.startmate.com/portfolio` and `startmate.com/portfolio` both get fetched
+  // (bugs.md #14). Dedupe within the seed list too.
   const sources = Array.isArray(body.sources)
-    ? body.sources.filter((s) => typeof s === 'string')
+    ? [
+        ...new Set(
+          body.sources
+            .filter((s): s is string => typeof s === 'string')
+            .map((s) => normalizeUrl(s))
+            .filter((s): s is string => s !== null),
+        ),
+      ]
     : [];
 
   if (!topic) return json({ error: 'topic is required' }, 400);

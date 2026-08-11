@@ -169,7 +169,7 @@ For each goal:
 - Open with a one-word verdict in bold: **Answered**, **Partial**, or **Unanswered**.
 - Then give the direct answer, built ONLY from the findings supplied.
 - Lead with specifics: counts, dollar figures, dates, percentages, named companies, named investors, named places. Vague summary is a failure.
-- Cite the source URL for each substantive claim.
+- Cite the source URL for each substantive claim, copied exactly from the SOURCE line of the finding it came from. Never construct, complete or guess a URL — not even by adding "www." — and never cite a bare [n] index.
 - If the findings do not answer the goal, say so in one line and state what is missing. Do not pad.
 
 End with a short "Gaps" section listing what a follow-up run should target.

@@ -22,6 +22,7 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [14](#bug-14--url-variants-bypass-dedupe-and-are-re-fetched) | URL variants bypass dedupe and are re-fetched | 🟡 Quality/cost | **Open** |
 | [15](#bug-15--large-html-ingest-is-over-the-cpu-limit-and-only-passed-on-burst-allowance) | Large HTML ingest is over the CPU limit and only passed on burst allowance | 🔴 Fatal (intermittent) | **Open** |
 | [16](#bug-16--source-validation-confirmed-extractability-not-topic) | Source validation confirmed extractability, not topic | 🟠 Research quality | **Open** |
+| [17](#bug-17--the-hard-spend-stop-undercounts-by-21-and-let-the-free-allocation-run-out) | The hard spend stop undercounts by ~21% and let the free allocation run out | 🔴 Guard failure | **Open** |
 
 ---
 
@@ -509,3 +510,55 @@ line, so probe the raw endpoint first even when ingesting HTML.
 That caught the bot-blocked half of the seed list. It did not catch a source that
 works perfectly and is about something else. **Extractability and relevance are
 two separate validations, and passing the first one loudly hides the second.**
+
+---
+
+## Bug 17 — The hard spend stop undercounts by ~21% and let the free allocation run out
+
+**Severity:** 🔴 Guard failure · **Status:** **Open** (found 2026-08-11)
+
+**How it showed up.** A 1-iteration verification run failed immediately:
+
+```
+AiError: 4006: you have used up your daily free allocation of 10,000 neurons
+```
+
+`GET /usage` at that moment reported **7,900.76 neurons across 54 calls** against a
+`DAILY_NEURON_BUDGET` of 10,000. The loop believed it had 2,099 neurons of headroom
+while Cloudflare had already cut it off. **The only hard stop in the system was
+reading 21% low.**
+
+**Root cause — three leaks, all of them avoidable.** `addNeurons()` is called in
+exactly two places (`workflow.ts:201`, `index.ts:334`) and counts
+`reasoning.neurons + chunks * 0.64`:
+
+| AI call | Metered |
+|---|---|
+| Reasoning — `workflow.ts:161` | ✅ exact, from `usage.neurons` |
+| Embedding — `memory.ts:36` | ⚠️ **estimated** at `chunks * 0.64` |
+| Recall query embedding, one per iteration | ❌ **never counted** |
+| Report synthesis — `workflow.ts:282`, `max_tokens: 1200` | ❌ **never counted** |
+
+The report call is the largest single generation in a run and is completely
+invisible to the meter. `recall()` embeds a query every iteration and is likewise
+invisible. And `memory.ts:36` *receives* a real `usage.neurons` from every embed
+call — the callers throw it away and substitute arithmetic that this repo had
+already measured as 25% low.
+
+**Impact.** `DAILY_NEURON_BUDGET` was deliberately set equal to the 10,000-neuron
+free allocation so that a Workers Paid account would never pay for Workers AI. Because
+the meter undercounts, **actual usage crossed the free allocation while the guard
+read 79%** — on Paid, that is the exact moment billing starts. The guard did not
+merely mis-report; it failed at its one job.
+
+**Fix (identified, not yet applied).** Return `usage.neurons` from `memory.ts`
+embed calls and add it; meter the `synthesise()` call the same way reasoning is
+metered. Every Workers AI response carries exact usage — no estimate is needed
+anywhere.
+
+**Lesson.** CLAUDE.md §6 says *prefer measured values to arithmetic*, and §7 says
+*build and verify the kill switch before the thing it stops*. Both were followed for
+the reasoning path and quietly abandoned for the other three call sites. **A guard
+tested only against the number it computes itself will always pass.** The test that
+would have caught this is comparing `/usage` to the Cloudflare-side figure — which
+is precisely what bug #10's fix was supposed to make unnecessary.

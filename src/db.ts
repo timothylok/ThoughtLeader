@@ -131,13 +131,13 @@ export async function recentFindings(
   db: D1Database,
   runId: string,
   limit: number,
-): Promise<{ n: number; finding: string }[]> {
+): Promise<{ n: number; finding: string; source_url: string | null }[]> {
   const { results } = await db
     .prepare(
-      `SELECT n, finding FROM findings WHERE run_id = ? ORDER BY n DESC LIMIT ?`,
+      `SELECT n, finding, source_url FROM findings WHERE run_id = ? ORDER BY n DESC LIMIT ?`,
     )
     .bind(runId, limit)
-    .all<{ n: number; finding: string }>();
+    .all<{ n: number; finding: string; source_url: string | null }>();
   return results.reverse();
 }
 

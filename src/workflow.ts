@@ -273,7 +273,12 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
     const findings = await recentFindings(this.env.DB, runId, 60);
     if (findings.length === 0) return 'No findings were recorded.';
 
-    const body = findings.map((f) => `[${f.n}] ${f.finding}`).join('\n\n');
+    // The URL must travel with the finding. Without it the report prompt still
+    // demands a citation and the model supplies one anyway — either the bare
+    // `[n]` index or a URL reconstructed from an entity name (bugs.md #13).
+    const body = findings
+      .map((f) => `[${f.n}] SOURCE: ${f.source_url || '(no source recorded)'}\n${f.finding}`)
+      .join('\n\n');
     const res = (await this.env.AI.run(this.env.REASON_MODEL, {
       messages: [
         { role: 'system', content: REPORT_SYSTEM },

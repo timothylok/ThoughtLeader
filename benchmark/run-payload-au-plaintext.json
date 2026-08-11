@@ -1,0 +1,19 @@
+{
+  "_comment": "CPU-safe AU seed list (bugs.md #15). Every source below returns a non-HTML content-type, so fetchSource() skips HTMLRewriter entirely (~1ms vs 20-241ms). See AU-SEEDS-PLAINTEXT.md for what this list gives up.",
+  "topic": "The Australian AI startup ecosystem in 2026: who the companies are, which sectors they cluster in, how they are funded, and what distinguishes AI-native companies from AI-enabled incumbents.",
+  "goals": [
+    "Identify the main sectors where Australian AI startups concentrate, and which are growing fastest",
+    "Establish how AI-native companies are distinguished from AI-enabled incumbents, and how the ecosystem splits between them",
+    "Map the funding landscape: most active investors in Australian AI, typical stages, and notable recent rounds",
+    "Identify the geographic clusters (Sydney, Melbourne, Brisbane, Perth) and what differentiates them",
+    "Surface named example companies for each major sector, with sources"
+  ],
+  "sources": [
+    "https://www.startupdaily.net/feed/",
+    "https://techcouncil.com.au/feed/",
+    "https://www.innovationaus.com/feed/",
+    "https://en.wikipedia.org/w/index.php?title=Australia&action=raw",
+    "https://en.wikipedia.org/w/index.php?title=Economy_of_Australia&action=raw"
+  ],
+  "maxIterations": 6
+}
