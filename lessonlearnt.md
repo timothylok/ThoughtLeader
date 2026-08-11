@@ -310,3 +310,95 @@ and every single one came from watching it actually run.
 
 *Full engineering notes, measured constraints, the 12-bug log and the raw benchmark
 data are in the repo.*
+
+---
+
+## 8. Addendum — session 2, 2026-08-11
+
+Six more bugs (#13–#18), and the pattern behind them is worth more than the fixes.
+
+### The prompt rewrite was the one change with no evidence. Now it has some.
+
+Re-running the identical payload with only the prompt changed is the cheapest
+experiment in this whole project — ~1,950 neurons, about two cents — and it settled a
+question that had been sitting open. The rewrite fixed the goal-4 substitution
+failure: asked about four cities, the old prompt answered about a fifth state; the new
+one returns **Unanswered** and names the gap. That is a smaller-sounding win than it
+is. An unattended loop that answers the wrong question is worse than one that reports
+a gap, because the wrong answer looks like output.
+
+It also *introduced* a regression, which is the honest half of the result: the report
+began citing `[3]`, `[10]` — iteration indices, not sources — because the new prompt
+demanded a URL the payload never contained. A prompt that asks for a field you did not
+supply does not fail. It produces a confident substitute.
+
+### Three limits, one shape
+
+Bug #1 was "subrequests are per invocation, not per step." Bug #15 turned out to be
+CPU, and bug #17 was neuron accounting. All three had the same structure: **a limit
+that a working system was already exceeding, hidden by variance.**
+
+HTML ingest cost 20–241 ms CPU against a ceiling between 11 ms and 20 ms — and it
+*worked* for 40+ iterations across four runs before killing one. The repo had already
+recorded the same page measuring 229/594/644 ms across runs. That variance was the
+warning, and it was filed as noise rather than as proximity to a ceiling.
+**Intermittent success is not headroom.** If a limit is passed only most of the time,
+it has not been measured.
+
+The spend guard failed the same way, and worse, because it was the safety rail. It
+metered the reasoning call exactly and left the report call, the recall embedding and
+the embedding cost either estimated or uncounted — 21% low, so real usage crossed the
+free allocation while `/usage` read 7,900 of 10,000. On a Paid plan that is the moment
+billing starts. Every Workers AI response hands you exact `usage.neurons`; three call
+sites threw it away in favour of arithmetic. **A guard tested only against the number
+it computes itself will always pass.**
+
+### Fixes that passed their own tests and left the bug next door
+
+Three times, a verified fix left an identical defect one branch away:
+
+- Bug #8 closed a zombie `status='running'` row on the create-failure path. The
+  `dryRun` branch three lines below created the same zombie by design — and the
+  watchdog resurrects that shape after two hours, so a throwaway test would have
+  launched itself as a real run (#18).
+- Bug #12 added URL normalisation and applied it to model proposals only. Seeds stayed
+  verbatim, so the `UNIQUE` constraint compared two canonical forms that could never
+  collide (#14).
+- The spend guard, above.
+
+Each fix was tested against its reproduction and passed. The lesson is to state the
+**invariant** — *no row sits in `running` without an instance*, *every URL in this
+table is canonical*, *every AI call is metered* — and then check every writer to it.
+Now CLAUDE.md §9.
+
+### The research briefs were blocked on sources, not on the agent
+
+Both briefs got a clean standalone run, and both results were about source access.
+NZ executed perfectly and answered almost nothing: 91% of its chunks came from two
+Wikipedia country articles that were never cited, because the bodies holding the real
+NZ startup data are all JS-rendered. AU needs a Paid plan, because the one source
+carrying the company data is 348 KB of HTML.
+
+Two of the seeds turned out to be **redirects** — both "Science and technology in X"
+Wikipedia URLs point at the country articles, so the brief's confident "35,112 ch / 29
+chunks" measured the wrong document, and that 1.84 MB page is what killed a run.
+Validating every source through the real pipeline caught the bot-blocked half of the
+seed list. It did not catch a source that fetches perfectly and is about something
+else. **Extractability and relevance are two separate checks, and passing the first
+one loudly hides the second.**
+
+### What I got wrong in this session
+
+Worth recording, since the point of this file is the process rather than the code.
+I diagnosed the CPU failure as per-invocation accumulation — bug #1's pattern — and
+said so before measuring; `wrangler tail` showed it was per-page cost instead. I filed
+bug #14's root cause as "no normalisation" when `normalizeUrl()` existed and was
+half-applied, and claimed `recentFindings()` already selected `source_url` when it did
+not. And I deployed during a live run *after* running the check, because the check
+printed its result and the deploy was chained with `&&`. Nothing broke, by luck.
+**Observing a blocker and proceeding is worse than never checking, because the log
+line looks like diligence.**
+
+The corrections are all in `bugs.md`. Every one of them came from the same place as
+the bugs: reading the code or the measurement instead of trusting the last thing I
+wrote down.

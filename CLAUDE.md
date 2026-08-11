@@ -78,8 +78,17 @@ bug log in `bugs.md`. These are not general advice — each one cost real time h
   "Accenture New Zealand" as an AI startup; it is a global consultancy, and it was the
   only concrete source for an entire arm of the work.
 - Numbers cited without a checkable source are unverified, not true. Say which is which.
+- **Extractability and relevance are two separate validations.** Probing every source
+  through the pipeline caught the bot-blocked half of one seed list. It did not catch
+  two sources that fetch perfectly and are about something else: both Wikipedia
+  "Science and technology in X" URLs are redirects to the country articles, so the
+  confident "35,112 ch / 29 chunks" in the brief measured the wrong document — and one
+  of them was 1.84 MB and killed a run. Downstream, 91% of a run's chunks went uncited.
+  Check the extracted text against the source's *stated purpose*, not just its length;
+  a large character count reads as success and hides this completely.
 
-The test: could you name the exact command that proved this source works?
+The test: could you name the exact command that proved this source works? And a second
+command that proved it is about what you think it is?
 
 ## 6. Measure The Limit That Scares You — First
 
@@ -151,6 +160,31 @@ wrangler deploy
 
 ---
 
+## 9. Fix The Invariant, Not The Incident
+
+**A fix verified against the path that failed will miss the path that hasn't yet.**
+
+Three times in this project a fix was applied to the exact reported symptom and left an
+identical defect one branch away:
+
+- Bug #8 stopped a failed `LOOP.create()` leaving a row in `status='running'` with no
+  instance. The `dryRun` branch **three lines below** created that same zombie by
+  design, and the watchdog would have launched a throwaway test as a real run (#18).
+- Bug #12 added `normalizeUrl()` to kill fabricated and duplicate URLs — and applied it
+  to model proposals only. Seeds stayed verbatim, so `UNIQUE(run_id, url)` compared two
+  canonical forms that could never collide (#14). **Canonicalisation applied to one side
+  of a comparison is not canonicalisation.**
+- The spend guard metered the reasoning call exactly and left three other AI call sites
+  estimated or uncounted, so it read 21% low (#17).
+
+Before closing a bug, state the **invariant** it protects — *"no row sits in `running`
+without an instance"*, *"every URL in the table is canonical"*, *"every AI call is
+metered"* — then grep for every writer to that invariant. The incident is one violation
+of it, not the whole of it.
+
+---
+
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites
 due to overcomplication, clarifying questions come before implementation rather than
-after mistakes, and the risks named during planning get measured rather than assumed.
+after mistakes, the risks named during planning get measured rather than assumed, and
+bug fixes close the invariant rather than the incident.
