@@ -107,3 +107,40 @@ Two honest options, not one:
 
 Note that option 2 also disables autonomous discovery: non-HTML sources expose no
 `<a href>`, so link harvesting yields zero candidates (`AU-NZ-SPLIT.md` §3).
+
+---
+
+## 5. Decision, 2026-08-12: option 2 — free tier, plain text
+
+**Settled by the account owner.** The loop stays on the Workers Free plan and
+`run-payload-au-plaintext.json` becomes the production brief rather than an
+experiment. The cost comparison that informed it: Workers Paid is **$5.00/month**
+(10M requests + 30M CPU-ms included, against a measured need of ~90k CPU-ms/month),
+and Workers AI's 10,000 neurons/day free allocation is **identical on both plans** —
+so the whole delta was the plan fee, and the whole benefit was HTML.
+
+**What changed in the payload.** Goals 2 and 5 are **deleted, not demoted**. Both
+depended solely on `smallbizai`; §3 above shows its feed contains zero hits for every
+term that made it valuable. Leaving them in would manufacture an `Unanswered` verdict
+every single run, which is noise dressed as rigour. The topic sentence lost its
+AI-native/AI-enabled clause with them. Three goals remain.
+
+**Goal 4 (geographic clusters) is kept on probation.** §3 predicts it unanswerable
+from the two good RSS feeds, and it is the goal that produced the worst content bug
+in the benchmark — run 2 answered about South Australia when asked about four
+cities (`PROMPT-REWRITE.md`). It stays in because that is a *prediction*, and this
+repo's rule is that briefs are settled by running them, not by reasoning about them.
+If the first free-tier run returns it `Unanswered`, delete it the same way.
+
+**Consequences accepted with the decision:**
+
+- `MAX_SOURCE_DEPTH=2` is now effectively 0. Plain text has no `<a href>`, so the
+  loop cannot expand its own source list — every source it will ever read is in the
+  seed list above. Source curation becomes a manual, human job.
+- Bug #15 is resolved by **source policy, not by code**. Nothing prevents a future
+  seed being HTML; the guard against it is the probe habit in bug #16 —
+  check `content-type` *and* `?action=raw` before adding a seed.
+- The free plan cannot exceed 10,000 neurons/day, so Cloudflare itself remains the
+  outer spend stop. That is the one advantage this option has over Paid, and it is
+  why `DAILY_NEURON_BUDGET` must terminate the run *before* the platform does — see
+  the analytics-vs-enforcement gap recorded in `HANDOFF.md`.

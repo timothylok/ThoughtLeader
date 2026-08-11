@@ -235,9 +235,10 @@ async function search(env: Env, runId: string, q: string): Promise<Response> {
   if (!runId || !q) return json({ error: 'run and q parameters required' }, 400);
   // Embedding the query is an AI call, so it is metered like any other
   // (bugs.md #10, #17). Cheap, but a guard with exceptions is not a guard.
+  // `recall` -> `embed` records it on return; adding it again here would
+  // double-count (bugs.md #19).
   const { items, neurons } = await recall(env, runId, q, 10);
-  const spentToday = await addNeurons(env.DB, neurons);
-  return json({ runId, query: q, matches: items, neurons, spentToday });
+  return json({ runId, query: q, matches: items, neurons, spentToday: await neuronsToday(env.DB) });
 }
 
 /**
@@ -311,7 +312,6 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
   let fresh: string[] = [];
   let observedLinks: string[] = [];
   let ingestError: string | null = null;
-  let embedNeurons = 0;
   try {
     const doc = await fetchSource(source.url, num(env.MAX_FETCH_BYTES, 262_144));
     const pieces = chunk(doc.text);
@@ -329,7 +329,6 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
       })),
     );
     chunks = stored.stored;
-    embedNeurons += stored.neurons;
     await markSourceResult(env.DB, source.id, chunks, null);
   } catch (e) {
     ingestError = String(e).slice(0, 300);
@@ -342,7 +341,6 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
     recallQuery(topic, goals, ''),
     num(env.RECALL_TOP_K, 8),
   );
-  embedNeurons += recalled.neurons;
   const prior = await recentFindings(env.DB, runId, 6);
 
   const res = (await env.AI.run(env.REASON_MODEL, {
@@ -357,17 +355,19 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
     max_tokens: 700,
     temperature: 0.4,
   })) as { response?: unknown; usage?: { neurons?: number } };
+  // Metered on return, before the D1 writes below (bugs.md #19). Every embed on
+  // this path already recorded itself inside `embed()`.
+  await addNeurons(env.DB, res.usage?.neurons ?? 0);
 
   const reasoning = parseReasoning(res.response);
   await recordFinding(env.DB, runId, n, source.url, reasoning);
-  const remembered = await remember(env, runId, [
+  await remember(env, runId, [
     { key: findingKey(n), text: reasoning.finding, sourceUrl: source.url, type: 'finding', n },
   ]);
-  embedNeurons += remembered.neurons;
-  // /step spends real neurons, so it must count against the same daily budget —
-  // otherwise testing is a blind spot in the spend guard. Every embed is counted
-  // from its own `usage.neurons`, never estimated (bugs.md #17).
-  const spentToday = await addNeurons(env.DB, (res.usage?.neurons ?? 0) + embedNeurons);
+  // /step spends real neurons, so it counts against the same daily budget —
+  // otherwise testing is a blind spot in the spend guard. Each call recorded
+  // itself as it returned; this only reads the resulting total.
+  const spentToday = await neuronsToday(env.DB);
   // Same grounding as the workflow: only URLs actually seen on a fetched page.
   // Without this, /step would silently bypass the bug #12 fix.
   const { accepted, rejected } = selectNextSources(reasoning.newSources, observedLinks);

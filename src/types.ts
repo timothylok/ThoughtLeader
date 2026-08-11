@@ -48,7 +48,11 @@ export interface IngestResult {
   url: string | null;
   sourceId: number | null;
   chunks: number;
-  /** Exact `usage.neurons` from embedding those chunks — never an estimate (bugs.md #17). */
+  /**
+   * Exact `usage.neurons` from embedding those chunks — never an estimate
+   * (bugs.md #17). DIAGNOSTIC ONLY: `embed()` already wrote this to the ledger
+   * when the call returned. Adding it to a total again double-counts (bugs.md #19).
+   */
   neurons: number;
   bytes: number;
   truncated: boolean;

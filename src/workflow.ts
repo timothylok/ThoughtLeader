@@ -29,6 +29,7 @@ import {
   failRun,
   isStopRequested,
   addNeurons,
+  neuronsToday,
 } from './db.ts';
 
 /**
@@ -169,7 +170,11 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
               max_tokens: 700,
               temperature: 0.4,
             })) as { response?: unknown; usage?: { neurons?: number } };
-            return { ...parseReasoning(res.response), neurons: res.usage?.neurons ?? 0 };
+            // Metered before parsing, not at the end of the iteration. This step
+            // retries twice, and Cloudflare bills each attempt (bugs.md #19).
+            const neurons = res.usage?.neurons ?? 0;
+            await addNeurons(env.DB, neurons);
+            return { ...parseReasoning(res.response), neurons };
           },
         );
 
@@ -201,41 +206,44 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
             console.log(`[${runId}] n=${n} rejected ungrounded URLs: ${rejected.join(', ')}`);
           }
 
-          // EVERY AI call this iteration made, each from its own exact
-          // `usage.neurons`. Estimating the embeddings and omitting the recall
-          // query made the guard read 21% low (bugs.md #17), which let actual
-          // usage pass the free allocation while `/usage` still showed headroom.
-          const spent = await addNeurons(
-            env.DB,
-            reasoning.neurons + ingested.neurons + recalled.neurons + remembered.neurons,
-          );
-
-          return { findingId, enqueued, spentToday: spent };
+          // No metering here. Every AI call above already recorded itself the
+          // moment it returned (bugs.md #17 covered which calls, #19 covered
+          // when). Aggregating at step end is what lost the retried attempts.
+          return { findingId, enqueued };
         });
 
         lastProgress = reasoning.progress;
 
         // 6. Assess AFTER the commit, so termination sees committed state.
-        const verdict = await step.do(`assess:${n}`, async (): Promise<TerminationReason | null> => {
-          if (await isStopRequested(env.DB, runId)) return 'stopped';
-          // Spend guard first among the automatic exits: on a Paid plan this is
-          // the only hard stop that exists. Budget alerts do not cap usage.
-          if (budget > 0 && recorded.spentToday >= budget) return 'budget-exhausted';
-          if (reasoning.done) return 'goals-met';
-          if (n >= maxIterations) return 'max-iterations';
-          if ((await pendingSourceCount(env.DB, runId)) === 0) return 'sources-exhausted';
-          return null;
-        });
+        const assessed = await step.do(
+          `assess:${n}`,
+          async (): Promise<{ verdict: TerminationReason | null; spentToday: number }> => {
+            // Read the ledger rather than carrying a total through the iteration:
+            // each AI call now writes its own spend as it happens, so the
+            // committed table is the only place the true running total exists.
+            const spentToday = await neuronsToday(env.DB);
+            if (await isStopRequested(env.DB, runId)) return { verdict: 'stopped', spentToday };
+            // Spend guard first among the automatic exits: on a Paid plan this is
+            // the only hard stop that exists. Budget alerts do not cap usage.
+            if (budget > 0 && spentToday >= budget)
+              return { verdict: 'budget-exhausted', spentToday };
+            if (reasoning.done) return { verdict: 'goals-met', spentToday };
+            if (n >= maxIterations) return { verdict: 'max-iterations', spentToday };
+            if ((await pendingSourceCount(env.DB, runId)) === 0)
+              return { verdict: 'sources-exhausted', spentToday };
+            return { verdict: null, spentToday };
+          },
+        );
 
-        if (verdict) {
-          terminal = verdict;
+        if (assessed.verdict) {
+          terminal = assessed.verdict;
           break;
         }
 
         console.log(
           `[${runId}] n=${n} chunks=${ingested.chunks} recalled=${recalled.items.length} ` +
             `enqueued=${recorded.enqueued} neurons=${reasoning.neurons.toFixed(1)} ` +
-            `spentToday=${recorded.spentToday.toFixed(0)}/${budget || '∞'}` +
+            `spentToday=${assessed.spentToday.toFixed(0)}/${budget || '∞'}` +
             `${ingested.error ? ` err=${ingested.error}` : ''}`,
         );
 
@@ -245,12 +253,13 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
 
       if (terminal) {
         await step.do(`report:${generation}`, async () => {
-          // max_tokens 1200 — the largest single generation in a run, and it was
-          // counted nowhere at all before bugs.md #17.
+          // max_tokens 1200 — the largest single generation in a run. It was
+          // counted nowhere at all before bugs.md #17, then counted only if
+          // `finishRun` succeeded, which lost the whole call whenever this step
+          // retried (bugs.md #19). `synthesise` now meters itself on return.
           const { report, neurons } = await this.synthesise(runId, topic, goals);
           await finishRun(env.DB, runId, terminal!, report);
-          const spentToday = await addNeurons(env.DB, neurons);
-          return { terminal, reportChars: report.length, neurons, spentToday };
+          return { terminal, reportChars: report.length, neurons };
         });
         return;
       }
@@ -308,9 +317,13 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
       temperature: 0.3,
     })) as { response?: string; usage?: { neurons?: number } };
 
+    // Metered on return, before the caller's `finishRun` can throw (bugs.md #19).
+    const neurons = res.usage?.neurons ?? 0;
+    await addNeurons(this.env.DB, neurons);
+
     return {
       report: (res.response ?? '').trim() || body,
-      neurons: res.usage?.neurons ?? 0,
+      neurons,
     };
   }
 }

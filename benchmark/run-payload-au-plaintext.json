@@ -1,12 +1,10 @@
 {
-  "_comment": "CPU-safe AU seed list (bugs.md #15). Every source below returns a non-HTML content-type, so fetchSource() skips HTMLRewriter entirely (~1ms vs 20-241ms). See AU-SEEDS-PLAINTEXT.md for what this list gives up.",
-  "topic": "The Australian AI startup ecosystem in 2026: who the companies are, which sectors they cluster in, how they are funded, and what distinguishes AI-native companies from AI-enabled incumbents.",
+  "_comment": "THE free-tier production brief, settled 2026-08-12: stay on the free plan, plain-text sources only. Every source returns a non-HTML content-type, so fetchSource() skips HTMLRewriter entirely (~1ms vs 20-241ms) and bug #15 cannot fire. Goals 2 and 5 of the original brief are DELETED, not left to come back Unanswered every run — both depended solely on smallbizai, which is HTML-only at 348KB and whose RSS feed contains none of the company data. See AU-SEEDS-PLAINTEXT.md §3 and §5.",
+  "topic": "The Australian AI startup ecosystem in 2026: which sectors the companies cluster in, how they are funded, and where they are concentrated geographically.",
   "goals": [
     "Identify the main sectors where Australian AI startups concentrate, and which are growing fastest",
-    "Establish how AI-native companies are distinguished from AI-enabled incumbents, and how the ecosystem splits between them",
     "Map the funding landscape: most active investors in Australian AI, typical stages, and notable recent rounds",
-    "Identify the geographic clusters (Sydney, Melbourne, Brisbane, Perth) and what differentiates them",
-    "Surface named example companies for each major sector, with sources"
+    "Identify the geographic clusters (Sydney, Melbourne, Brisbane, Perth) and what differentiates them"
   ],
   "sources": [
     "https://www.startupdaily.net/feed/",

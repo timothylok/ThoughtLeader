@@ -9,6 +9,7 @@
  */
 
 import type { Env } from './types.ts';
+import { addNeurons } from './db.ts';
 
 export type MemoryType = 'chunk' | 'finding';
 
@@ -46,8 +47,14 @@ export async function embed(
     data: number[][];
     usage?: { neurons?: number };
   };
+  // Metered HERE, before the guard below can throw and before the caller does
+  // anything else. Cloudflare bills every attempt of a retried step, so a meter
+  // that runs at step end loses the attempts that failed after this returned
+  // (bugs.md #19). Callers must NOT add this to the ledger again.
+  const neurons = res.usage?.neurons ?? 0;
+  await addNeurons(env.DB, neurons);
   if (!res?.data?.length) throw new Error('embedding model returned no data');
-  return { vectors: res.data, neurons: res.usage?.neurons ?? 0 };
+  return { vectors: res.data, neurons };
 }
 
 export interface MemoryItem {

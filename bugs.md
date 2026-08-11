@@ -24,6 +24,7 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [16](#bug-16--source-validation-confirmed-extractability-not-topic) | Source validation confirmed extractability, not topic | 🟠 Research quality | **Open** |
 | [17](#bug-17--the-hard-spend-stop-undercounts-by-21-and-let-the-free-allocation-run-out) | The hard spend stop undercounts by ~21% and let the free allocation run out | 🔴 Guard failure | Fixed, **unverified** |
 | [18](#bug-18--dryrun-leaves-a-run-the-watchdog-will-start-for-real) | `dryRun` leaves a run the watchdog will start for real | 🟠 Latent spend | **Fixed** |
+| [19](#bug-19--the-meter-counts-steps-cloudflare-bills-attempts) | The meter counts steps; Cloudflare bills attempts | 🔴 Guard failure | Fixed, **unverified** |
 
 ---
 
@@ -622,3 +623,76 @@ dry run ends terminal and the watchdog ignores it.
 the invariant it was protecting. The invariant is *"no row may sit in `running`
 without an instance"* — and checking that invariant across all writers would have
 found this immediately. **Fix the invariant, not the incident.**
+
+---
+
+## Bug 19 — The meter counts steps; Cloudflare bills attempts
+
+**Severity:** 🔴 Guard failure · **Status:** **Fixed, verification pending**
+(found 2026-08-11 auditing bug #17's fix, before that fix had ever run)
+
+**How it showed up.** Not from a run — from asking what bug #17's audit had actually
+checked. That audit enumerated *which* `AI.run` sites were metered and closed all
+five. It never asked *when* they were metered. Both surviving leaks live in the gap
+between the AI call returning and the step committing.
+
+**Root cause.** `step.do` re-executes its **entire closure** on retry, and
+**Cloudflare bills every attempt**. Metering at the end of a step therefore records
+only the final, successful attempt and silently discards every earlier one that
+reached the AI call and then failed further down. Three open windows:
+
+| Step | Retries | Billed but never recorded |
+|---|---|---|
+| `ingest:${n}` | 2 | `remember()` embeds, then `VECTORIZE.upsert` / `markSourceResult` throws |
+| `record:${n}` | default | `remember()` embeds, then `enqueueSources` / `addedSourceCount` throws |
+| `report:${gen}` | default | `synthesise()` runs at `max_tokens: 1200` — the largest call in a run — then `finishRun` throws |
+
+**This is not hypothetical.** `schema.sql` already records that `record:11` in run
+`19ac529b` produced **six** finding rows, because the closure ran six times
+(bug #3). Six finding embeds were billed that iteration; at most one was metered.
+The provider figures agree: on UTC 2026-08-11 Cloudflare counted **60** reasoning
+calls against **54** `addNeurons` writes.
+
+**Why bug #17's fix could not catch it.** #17 replaced arithmetic with
+`usage.neurons` and aggregated the iteration's total in one write at the end of
+`record`. That is a correct sum of a run with no retries — and a run with no retries
+is exactly what a verification run is. **A clean run cannot test this.**
+
+**Fix (applied, version `19c44a8a`).** Every `AI.run` records its own spend the
+moment it returns, in its own write, before any other work in the step — including
+before `embed()`'s own `!res.data.length` guard throws, since that call was billed
+too. No caller aggregates. `assess` reads the committed total with `neuronsToday()`
+instead of carrying one through the iteration.
+
+| Call site | Metered at |
+|---|---|
+| `memory.ts:46` embed (all embed traffic, via `remember` + `recall`) | `memory.ts:55` |
+| `workflow.ts:168` reason | `workflow.ts:176` |
+| `workflow.ts:308` synthesise | `workflow.ts:322` |
+| `index.ts:349` `/step` reason | `index.ts:363` |
+| `index.ts:259` `{"ai":…}` debug probe | `index.ts:265` (already immediate) |
+
+Metering before the retry looks like double-counting and is not: the retried call
+was billed as well, so recording each attempt is what matches the invoice. **The
+step-end aggregate was the bug.**
+
+**Cost of the fix.** One extra D1 write per AI call — roughly three more
+subrequests per iteration against the free plan's 50-per-invocation budget
+(bug #1). `ITERATIONS_PER_GEN` stays at 8; the run that died on subrequests died at
+n=11, so the margin narrows but holds.
+
+**Side effect worth having.** `usage.calls` now increments once per AI call rather
+than once per iteration, so it is directly comparable to `count` in Cloudflare's
+`aiInferenceAdaptiveGroups` dataset. The 60-vs-54 discrepancy above becomes a
+standing check rather than a one-off observation.
+
+**Verification.** Same run as #13 and #17, plus the call-count comparison. Note what
+it can and cannot show: on a clean run the meter should match Cloudflare **exactly**,
+which proves call-site coverage and nothing about retry accounting. The retry path is
+only testable by forcing a step to fail after its AI call.
+
+**Lesson.** Bug #17's lesson was *meter every call*. That was the incident. The
+invariant is **every billed call is recorded before anything else can fail** — and
+#17's own fix violated it at three sites while closing five. Four bugs in this log
+(#8→#18, #12→#14, #17→#19) are now the same shape: a fix verified against the path
+that failed, leaving the identical defect one branch away. CLAUDE.md §9.
