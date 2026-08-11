@@ -360,6 +360,15 @@ cross-referencing `/state?run=` by hand. This is a **regression against the old
 prompt**, and it partly undercuts the grounding work in bug #12: citations that
 cannot be checked are not much better than citations that are wrong.
 
+**Second, worse symptom — run `0f4fdd5c`.** With the same prompt, the NZ run's
+report cited **full URLs** rather than `[n]`. Neither run's findings contain a URL
+anywhere in their text, so those URLs were **reconstructed from entity names**, not
+recalled from the payload. The tell: the report cites
+`https://www.creativehq.co.nz/` when the actual source is `https://creativehq.co.nz/`
+— the model invented the `www.`. So the same root cause produces either dead
+references or **plausible fabricated ones**, and the fabricating symptom is more
+dangerous because it looks correct and passes casual review.
+
 **Fix (identified, not yet applied).** Carry the URL into the synthesis payload
 so the model has something real to cite — `recentFindings()` already selects
 `source_url`. Not deployed: a run was in flight, and deploying mid-run is bug #4.
@@ -388,19 +397,35 @@ Roughly **25% of a 12-iteration fetch budget** went to re-reading known content,
 and smallbizai alone stored **82 duplicate vectors** where 41 would do — inflating
 recall competition as well as embedding cost.
 
-**Root cause.** The bug #12 fix filters proposed URLs against links *observed on
-the page*, which correctly kills fabrication. But real pages genuinely link to
-themselves in both forms, and the dedupe check compares **raw URL strings**, so
-`example.com/x` and `www.example.com/x/` are two distinct rows.
+**Root cause — normalisation is applied to one side of the comparison only.**
+The pieces that should prevent this all exist:
 
-**Fix (identified, not yet applied).** Normalise before the dedupe comparison:
-lowercase the host, strip a leading `www.`, strip a trailing slash, drop the
-fragment. Keep the original URL for display.
+- `normalizeUrl()` (`src/ingest.ts:42`) lowercases the host, strips a leading
+  `www.`, drops the fragment and tracking params, and strips a trailing slash.
+- `selectNextSources()` (`src/ingest.ts:225`) applies it to every model proposal.
+- `sources` carries `UNIQUE (run_id, url)` (`schema.sql:28`) and `enqueueSources()`
+  inserts with `INSERT OR IGNORE`.
 
-**Lesson.** Bug #12's own write-up already listed *"duplicate hostnames of
-existing seeds (`smallbizai.au/`, `startmate.com/portfolio` without `www`)"* as a
-symptom — then the fix addressed only the fabrication half. **A symptom noted in
-a bug report is not a symptom covered by its fix.**
+But **seed URLs are never normalised.** `src/index.ts:143` filters
+`body.sources` for strings and hands them to `createRun()` verbatim. So seeds are
+stored as `https://www.startmate.com/portfolio` while proposals are canonicalised
+to `https://startmate.com/portfolio`. The two forms are different strings, the
+UNIQUE constraint cannot see the collision, and `INSERT OR IGNORE` dutifully
+inserts. The dedupe machinery works perfectly on inputs that never meet.
+
+**Fix (identified, not yet applied).** Normalise seeds through the same
+`normalizeUrl()` at `/start`, so both sides of the UNIQUE constraint are in one
+canonical form. No schema change needed.
+
+**Correction to the bug #12 write-up.** That entry credits `normalizeUrl()` with
+"killing the `www` and trailing-slash duplicates." It does — for proposals. The
+claim is true of the function and false of the system, and run `76fb1813` produced
+the exact duplicates the entry says were eliminated.
+
+**Lesson.** Bug #12's own write-up listed *"duplicate hostnames of existing seeds"*
+as a symptom and then shipped a fix that normalised only the new URLs. **A
+canonicalisation applied to one side of a comparison is not a canonicalisation** —
+and a fix verified against the half you changed will report success.
 
 ---
 
