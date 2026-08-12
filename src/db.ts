@@ -1,4 +1,4 @@
-import type { Reasoning, TerminationReason } from './types.ts';
+import type { AiUsage, Reasoning, TerminationReason } from './types.ts';
 
 const now = () => Date.now();
 
@@ -203,8 +203,62 @@ export async function clearStop(db: D1Database, runId: string): Promise<void> {
 
 export const utcDay = (at = Date.now()): string => new Date(at).toISOString().slice(0, 10);
 
+/**
+ * Neurons per million INPUT tokens, by model id, from
+ * developers.cloudflare.com/workers-ai/platform/pricing.
+ *
+ * Only embedding models belong here. Text-generation models return an exact
+ * `usage.neurons` and are priced from input *and* output tokens at different
+ * rates, so a single input-token constant would be wrong for them — if one ever
+ * stops returning `neurons`, `priceCall` must shout rather than guess.
+ */
+const EMBEDDING_NEURONS_PER_M_INPUT_TOKENS: Record<string, number> = {
+  '@cf/baai/bge-small-en-v1.5': 1841,
+};
+
+/**
+ * What one AI call cost, in neurons.
+ *
+ * Order matters: the provider's own figure wins when it exists; otherwise an
+ * embedding model is priced from its exact `total_tokens` times its published
+ * rate. Anything else is UNKNOWN, and unknown must never be silently free —
+ * `?? 0` on a missing `usage.neurons` is what let embeddings meter as zero
+ * forever (bugs.md #21).
+ */
+export function priceCall(model: string, usage: AiUsage | undefined): number {
+  if (typeof usage?.neurons === 'number') return usage.neurons;
+
+  const rate = EMBEDDING_NEURONS_PER_M_INPUT_TOKENS[model];
+  const tokens = usage?.total_tokens ?? usage?.prompt_tokens;
+  if (rate !== undefined && typeof tokens === 'number') {
+    return (tokens * rate) / 1_000_000;
+  }
+
+  console.error(
+    `[spend] UNPRICED AI CALL model=${model} usage=${JSON.stringify(usage ?? null)} — ` +
+      `no usage.neurons and no entry in EMBEDDING_NEURONS_PER_M_INPUT_TOKENS. ` +
+      `SPEND IS BEING UNDERCOUNTED; add this model's rate from Cloudflare pricing.`,
+  );
+  return 0;
+}
+
+/**
+ * Price one AI call and record it. The ONLY way spend enters the ledger — call
+ * it immediately after `AI.run` returns, before anything else in the step can
+ * throw, because Cloudflare bills every retried attempt (bugs.md #19).
+ */
+export async function meterCall(
+  db: D1Database,
+  model: string,
+  usage: AiUsage | undefined,
+): Promise<number> {
+  const neurons = priceCall(model, usage);
+  await addNeurons(db, neurons);
+  return neurons;
+}
+
 /** Accumulate spend for today and return the new running total. */
-export async function addNeurons(
+async function addNeurons(
   db: D1Database,
   neurons: number,
 ): Promise<number> {

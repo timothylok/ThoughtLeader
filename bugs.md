@@ -26,7 +26,7 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [18](#bug-18--dryrun-leaves-a-run-the-watchdog-will-start-for-real) | `dryRun` leaves a run the watchdog will start for real | 🟠 Latent spend | **Fixed** |
 | [19](#bug-19--the-meter-counts-steps-cloudflare-bills-attempts) | The meter counts steps; Cloudflare bills attempts | 🔴 Guard failure | Fixed, **unverified** |
 | [20](#bug-20--daily_neuron_budget-resets-on-a-utc-day-cloudflares-allocation-does-not) | `DAILY_NEURON_BUDGET` resets on a UTC day; Cloudflare's allocation does not | 🟠 Guard shape | **Open** (mitigated) |
-| [21](#bug-21--embeddings-return-no-neurons-field-so--0-meters-them-as-free) | Embeddings return no `neurons` field, so `?? 0` meters them as free | 🔴 Guard failure | **Open** |
+| [21](#bug-21--embeddings-return-no-neurons-field-so--0-meters-them-as-free) | Embeddings return no `neurons` field, so `?? 0` meters them as free | 🔴 Guard failure | **Fixed & measured** |
 
 ---
 
@@ -770,7 +770,7 @@ condition, don't trust the clock.**
 
 ## Bug 21 — Embeddings return no `neurons` field, so `?? 0` meters them as free
 
-**Severity:** 🔴 Guard failure · **Status:** **Open** · found 2026-08-12 by the
+**Severity:** 🔴 Guard failure · **Status:** **Fixed & measured** · found 2026-08-12 by the
 reconciliation that was supposed to close bug #17
 
 **How it showed up.** The verification run `d2cd8b42` — one iteration, one small
@@ -810,7 +810,32 @@ of spend. The guard is systematically ~6% low. Smaller than the original 21%, an
 worse in one respect: it is silent, permanent, and sits behind a fix that was
 recorded as complete.
 
-**Fix (proposed, not applied).** Cloudflare publishes **1,841 neurons per million
+**Fix applied 2026-08-12, version `a39be94e`.** A single `meterCall(db, model, usage)`
+in `db.ts` is now the only way spend enters the ledger, and all five `AI.run` sites
+route through it; `addNeurons` is no longer exported. It resolves cost in strict
+order:
+
+1. `usage.neurons` when the provider supplies it (text generation),
+2. else `total_tokens × rate/1e6` for a model in
+   `EMBEDDING_NEURONS_PER_M_INPUT_TOKENS`,
+3. else **`console.error` naming the model and its usage block**, then 0.
+
+Only embedding models belong in the rate table — text-generation models price input
+and output tokens differently, so a single input-token constant would be wrong for
+them, and a text model that stopped returning `neurons` must shout rather than be
+quietly mispriced.
+
+**Independent validation of the rate.** A direct REST embed with exactly
+`prompt_tokens: 9` was attributed **0.016567499997** neurons by Cloudflare;
+`9 × 1841/1e6 = 0.016569`. That implies an effective rate of 1,840.83 against a
+published 1,841 — the published figure is rounded, and the residual error is
+**0.009%**. This check is independent of the earlier 287,613-token consistency
+check, which was circular (the token count was itself derived from the rate).
+
+**Live confirmation.** One `/search` embed after the fix: the meter moved by
+**0.014728** neurons where it had previously moved by exactly 0.
+
+**Superseded proposal.** Cloudflare publishes **1,841 neurons per million
 input tokens** for `bge-small-en-v1.5`. The provider still returns an exact
 `total_tokens`, so the cost is `total_tokens * 1841 / 1e6` — the provider's own
 measurement times the provider's own published rate, not a guess at token counts

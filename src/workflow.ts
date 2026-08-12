@@ -13,7 +13,7 @@
  */
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { num, type Env, type RunParams, type Reasoning, type TerminationReason, type IngestResult } from './types.ts';
+import { num, type AiUsage, type Env, type RunParams, type Reasoning, type TerminationReason, type IngestResult } from './types.ts';
 import { fetchSource, chunk, selectNextSources } from './ingest.ts';
 import { recall, remember, chunkKey, findingKey, type Recalled } from './memory.ts';
 import { buildPrompt, parseReasoning, recallQuery, REPORT_SYSTEM } from './prompt.ts';
@@ -28,7 +28,7 @@ import {
   finishRun,
   failRun,
   isStopRequested,
-  addNeurons,
+  meterCall,
   neuronsToday,
 } from './db.ts';
 
@@ -169,11 +169,10 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
               messages,
               max_tokens: 700,
               temperature: 0.4,
-            })) as { response?: unknown; usage?: { neurons?: number } };
+            })) as { response?: unknown; usage?: AiUsage };
             // Metered before parsing, not at the end of the iteration. This step
             // retries twice, and Cloudflare bills each attempt (bugs.md #19).
-            const neurons = res.usage?.neurons ?? 0;
-            await addNeurons(env.DB, neurons);
+            const neurons = await meterCall(env.DB, env.REASON_MODEL, res.usage);
             return { ...parseReasoning(res.response), neurons };
           },
         );
@@ -315,11 +314,10 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
       ],
       max_tokens: 1200,
       temperature: 0.3,
-    })) as { response?: string; usage?: { neurons?: number } };
+    })) as { response?: string; usage?: AiUsage };
 
     // Metered on return, before the caller's `finishRun` can throw (bugs.md #19).
-    const neurons = res.usage?.neurons ?? 0;
-    await addNeurons(this.env.DB, neurons);
+    const neurons = await meterCall(this.env.DB, this.env.REASON_MODEL, res.usage);
 
     return {
       report: (res.response ?? '').trim() || body,

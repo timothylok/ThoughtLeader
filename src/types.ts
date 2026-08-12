@@ -16,6 +16,18 @@ export interface Env {
   DAILY_NEURON_BUDGET: string;
 }
 
+/**
+ * The `usage` block on a Workers AI response. `neurons` is present on text
+ * generation and **absent on embeddings**, which return token counts only
+ * (bugs.md #21) — so every field here is optional and none may be assumed.
+ */
+export interface AiUsage {
+  neurons?: number;
+  total_tokens?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+}
+
 /** Workflow instance params. Carried across generations. */
 export interface RunParams {
   runId: string;

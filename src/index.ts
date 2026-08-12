@@ -1,6 +1,6 @@
 // @ts-expect-error - bundled as text via the Text rule in wrangler.jsonc
 import LIVE_HTML from '../liverun.html';
-import { num, type Env, type StartRequest } from './types.ts';
+import { num, type AiUsage, type Env, type StartRequest } from './types.ts';
 import { fetchSource, chunk, selectNextSources, normalizeUrl } from './ingest.ts';
 import { recall, remember, chunkKey, findingKey } from './memory.ts';
 import { buildPrompt, parseReasoning, recallQuery } from './prompt.ts';
@@ -20,7 +20,7 @@ import {
   finishRun,
   neuronsToday,
   usageHistory,
-  addNeurons,
+  meterCall,
 } from './db.ts';
 
 export { ResearchLoop } from './workflow.ts';
@@ -259,10 +259,11 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
     const raw = (await env.AI.run(env.REASON_MODEL, {
       messages: [{ role: 'user', content: aiProbe }],
       max_tokens: 200,
-    })) as { usage?: { neurons?: number } };
+    })) as { usage?: AiUsage };
     // This debug path spends real neurons. Unmetered, it is a hole in the guard
     // exactly like /step was before bug #10 — close every path to the resource.
-    const spentToday = await addNeurons(env.DB, raw.usage?.neurons ?? 0);
+    await meterCall(env.DB, env.REASON_MODEL, raw.usage);
+    const spentToday = await neuronsToday(env.DB);
     return json({
       model: env.REASON_MODEL,
       rawShape: Object.keys(raw as object),
@@ -354,10 +355,10 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
     ),
     max_tokens: 700,
     temperature: 0.4,
-  })) as { response?: unknown; usage?: { neurons?: number } };
+  })) as { response?: unknown; usage?: AiUsage };
   // Metered on return, before the D1 writes below (bugs.md #19). Every embed on
   // this path already recorded itself inside `embed()`.
-  await addNeurons(env.DB, res.usage?.neurons ?? 0);
+  await meterCall(env.DB, env.REASON_MODEL, res.usage);
 
   const reasoning = parseReasoning(res.response);
   await recordFinding(env.DB, runId, n, source.url, reasoning);

@@ -8,8 +8,8 @@
  * setup, before the first insert. See README §2.4.
  */
 
-import type { Env } from './types.ts';
-import { addNeurons } from './db.ts';
+import type { AiUsage, Env } from './types.ts';
+import { meterCall } from './db.ts';
 
 export type MemoryType = 'chunk' | 'finding';
 
@@ -45,14 +45,16 @@ export async function embed(
   if (texts.length === 0) return { vectors: [], neurons: 0 };
   const res = (await env.AI.run(env.EMBED_MODEL, { text: texts })) as {
     data: number[][];
-    usage?: { neurons?: number };
+    usage?: AiUsage;
   };
   // Metered HERE, before the guard below can throw and before the caller does
   // anything else. Cloudflare bills every attempt of a retried step, so a meter
   // that runs at step end loses the attempts that failed after this returned
   // (bugs.md #19). Callers must NOT add this to the ledger again.
-  const neurons = res.usage?.neurons ?? 0;
-  await addNeurons(env.DB, neurons);
+  //
+  // `meterCall` prices this from total_tokens, NOT usage.neurons: embedding
+  // responses have no such field, so reading it recorded 0 forever (bugs.md #21).
+  const neurons = await meterCall(env.DB, env.EMBED_MODEL, res.usage);
   if (!res?.data?.length) throw new Error('embedding model returned no data');
   return { vectors: res.data, neurons };
 }
