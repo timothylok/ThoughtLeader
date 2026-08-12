@@ -18,13 +18,15 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [10](#bug-10--step-spent-neurons-without-metering-them) | `/step` spent neurons without metering them | 🟡 Guard bypass | Fixed |
 | [11](#bug-11--navigation-boilerplate-was-being-embedded) | Navigation boilerplate was being embedded | 🟡 Quality/cost | Fixed |
 | [12](#bug-12--model-invented-non-existent-source-urls) | Model invented non-existent source URLs | 🟡 Quality | **Fixed & measured** |
-| [13](#bug-13--report-cites-iteration-numbers-as-if-they-were-sources) | Report cites iteration numbers as if they were sources | 🟠 Traceability | Fixed, **unverified** |
+| [13](#bug-13--report-cites-iteration-numbers-as-if-they-were-sources) | Report cites iteration numbers as if they were sources | 🟠 Traceability | ✅ **Fixed & verified** (run `d2cd8b42`) |
 | [14](#bug-14--url-variants-bypass-dedupe-and-are-re-fetched) | URL variants bypass dedupe and are re-fetched | 🟡 Quality/cost | **Fixed & verified** |
 | [15](#bug-15--large-html-ingest-is-over-the-cpu-limit-and-only-passed-on-burst-allowance) | Large HTML ingest is over the CPU limit and only passed on burst allowance | 🔴 Fatal (intermittent) | **Open** |
 | [16](#bug-16--source-validation-confirmed-extractability-not-topic) | Source validation confirmed extractability, not topic | 🟠 Research quality | **Open** |
-| [17](#bug-17--the-hard-spend-stop-undercounts-by-21-and-let-the-free-allocation-run-out) | The hard spend stop undercounts by ~21% and let the free allocation run out | 🔴 Guard failure | Fixed, **unverified** |
+| [17](#bug-17--the-hard-spend-stop-undercounts-by-21-and-let-the-free-allocation-run-out) | The hard spend stop undercounts by ~21% and let the free allocation run out | 🔴 Guard failure | ⚠️ **Verified FAILED** — reasoning exact, embeddings still 0 (see #21) |
 | [18](#bug-18--dryrun-leaves-a-run-the-watchdog-will-start-for-real) | `dryRun` leaves a run the watchdog will start for real | 🟠 Latent spend | **Fixed** |
 | [19](#bug-19--the-meter-counts-steps-cloudflare-bills-attempts) | The meter counts steps; Cloudflare bills attempts | 🔴 Guard failure | Fixed, **unverified** |
+| [20](#bug-20--daily_neuron_budget-resets-on-a-utc-day-cloudflares-allocation-does-not) | `DAILY_NEURON_BUDGET` resets on a UTC day; Cloudflare's allocation does not | 🟠 Guard shape | **Open** (mitigated) |
+| [21](#bug-21--embeddings-return-no-neurons-field-so--0-meters-them-as-free) | Embeddings return no `neurons` field, so `?? 0` meters them as free | 🔴 Guard failure | **Open** |
 
 ---
 
@@ -517,7 +519,9 @@ two separate validations, and passing the first one loudly hides the second.**
 
 ## Bug 17 — The hard spend stop undercounts by ~21% and let the free allocation run out
 
-**Severity:** 🔴 Guard failure · **Status:** **Fixed, verification pending** (found 2026-08-11)
+**Severity:** 🔴 Guard failure · **Status:** ⚠️ **Fixed in part — verification FAILED
+2026-08-12.** The reasoning path now meters exactly; the embedding path still records
+nothing. See [bug #21](#bug-21--embeddings-return-no-neurons-field-so--0-meters-them-as-free).
 
 **How it showed up.** A 1-iteration verification run failed immediately:
 
@@ -696,3 +700,133 @@ invariant is **every billed call is recorded before anything else can fail** —
 #17's own fix violated it at three sites while closing five. Four bugs in this log
 (#8→#18, #12→#14, #17→#19) are now the same shape: a fix verified against the path
 that failed, leaving the identical defect one branch away. CLAUDE.md §9.
+
+---
+
+## Bug 20 — `DAILY_NEURON_BUDGET` resets on a UTC day; Cloudflare's allocation does not
+
+**Severity:** 🟠 Guard shape · **Status:** **Open** (mitigated, not fixed) ·
+found 2026-08-12 by a verification run that failed on a fresh UTC day
+
+**How it showed up.** The bug #13/#17/#19 verification was armed for 00:05 UTC on the
+theory — written into `HANDOFF.md` as fact — that the free allocation *"resets at UTC
+midnight"*. It fired on time, `/usage` correctly read **0 neurons for 2026-08-12**,
+and the run died anyway:
+
+```
+AiError: 4006: you have used up your daily free allocation of 10,000 neurons
+```
+
+Six minutes later, at 00:11Z, a probe embed **succeeded**. Nothing was deployed or
+changed in between.
+
+**What the hourly data shows.** `aiInferenceAdaptiveGroups` grouped by
+`datetimeHour`, cumulative from first use:
+
+| Hour (UTC) | Neurons | Calls | Cumulative |
+|---|---|---|---|
+| 2026-08-10T23:00 | 1,617.2 | 71 | 1,617 |
+| 2026-08-11T00:00 | 1,882.5 | 55 | 3,500 |
+| 2026-08-11T01:00 | 2,144.3 | 61 | 5,644 |
+| 2026-08-11T03:00 | 4,392.6 | 105 | **10,037** |
+| 2026-08-11T04:00 | 251.4 | 9 | 10,288 |
+
+Calendar-day Aug 11 totals **8,670.8** — comfortably under 10,000 — yet enforcement
+refused calls at ~04:15Z that day. **The only sum that reaches 10,000 is one that
+crosses the UTC-midnight boundary and includes Aug 10's 23:00Z hour.**
+
+**Best-supported explanation: a rolling ~24-hour window, not a calendar day.** It
+accounts for both observations — the 04:15Z Aug 11 cutoff (trailing 24h = 10,288)
+and the recovery between 00:05Z and 00:11Z Aug 12 (the 00:05–00:11 slice of Aug 11's
+busy 00:00 hour ages out, dropping the trailing total back under the line). Not
+proven: that would need minute-level data. What *is* proven is the negative — the
+allocation is not a UTC calendar day, and analytics' per-day figure is not the number
+enforcement uses.
+
+**Why this matters beyond a failed test.** `addNeurons()`/`neuronsToday()` key on
+`utcDay()`. At 00:00Z the guard resets to 0 and believes it has a full 8,000-neuron
+budget while Cloudflare may still be holding most of a 24-hour window against the
+account. The guard and the thing it is guarding **are measured over different
+windows**, so the guard can authorise spending that the platform refuses. On the free
+plan that costs a run; on Paid, where nothing refuses anything, it is the difference
+between the free allocation and a bill.
+
+**Mitigation applied.** `DAILY_NEURON_BUDGET` 10000 → **8000**, which buys headroom
+against the mismatch but does not correct the shape.
+
+**Real fix (not applied).** Meter over a trailing 24-hour window rather than a
+calendar day — the `usage` table would need per-call or per-hour rows instead of one
+row per day, and `neuronsToday()` becomes `neuronsInTrailing24h()`. Deferred: it is a
+schema change, and the mitigation holds for one daily run of ~2,400 neurons.
+
+**Lesson.** `HANDOFF.md` asserted the reset time as a fact and the verification was
+scheduled against it; the assertion had never been measured. This is CLAUDE.md §6
+exactly — *never let an assumption become a justification in the docs* — and it is
+the second time in this project that a sentence in a doc, not a line of code, was
+the defect. The fix habit is the probe that replaced the schedule: **test the
+condition, don't trust the clock.**
+
+---
+
+## Bug 21 — Embeddings return no `neurons` field, so `?? 0` meters them as free
+
+**Severity:** 🔴 Guard failure · **Status:** **Open** · found 2026-08-12 by the
+reconciliation that was supposed to close bug #17
+
+**How it showed up.** The verification run `d2cd8b42` — one iteration, one small
+source — reconciled against Cloudflare:
+
+| | `/usage` | Cloudflare | Delta |
+|---|---|---|---|
+| `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 75.39326477050781 | 75.39326477050781 | **exact, to 14 dp** |
+| `@cf/baai/bge-small-en-v1.5` | **0** | 1.203904999782 | **−100%** |
+| total | 75.393 | 76.597 | −1.57% |
+| calls | 6 | 9 | −3 |
+
+The call gap is correct and expected: three embed attempts were refused with `4006`
+during bug #20, cost 0 neurons, and recorded 0. The **neuron** gap is the bug.
+
+**Root cause.** The two models return different `usage` shapes. Queried directly
+against the REST API:
+
+```
+@cf/baai/bge-small-en-v1.5    usage = {prompt_tokens, completion_tokens, total_tokens}
+@cf/meta/llama-3.3-70b-...    usage = {prompt_tokens, …, neurons: 1.3963143825531006}
+```
+
+**Embedding responses carry no `neurons` field at all.** `res.usage?.neurons ?? 0` in
+`memory.ts` therefore records exactly zero for every embed, forever, without error.
+
+**Why bug #17's fix asserted the opposite.** #17's entry states *"`embed()` now
+returns `{ vectors, neurons }` from the response's own `usage.neurons`"* and *"All
+arithmetic is gone."* The first half is true and the second half is why it fails:
+removing the (bad) arithmetic without checking that the replacement field **exists**
+swapped a 25%-low estimate for a 100%-low measurement. The repo's own memory note
+— *"Workers AI response shape varies"* — was about `response`, and the same lesson
+was not carried to `usage`.
+
+**Impact.** Embeddings were 529.50 of 8,670.74 neurons on UTC 2026-08-11 — **6.1%**
+of spend. The guard is systematically ~6% low. Smaller than the original 21%, and
+worse in one respect: it is silent, permanent, and sits behind a fix that was
+recorded as complete.
+
+**Fix (proposed, not applied).** Cloudflare publishes **1,841 neurons per million
+input tokens** for `bge-small-en-v1.5`. The provider still returns an exact
+`total_tokens`, so the cost is `total_tokens * 1841 / 1e6` — the provider's own
+measurement times the provider's own published rate, not a guess at token counts
+like the `chunks * 0.64` this replaced. Consistency check: 529.4954 neurons ÷
+(1841/1e6) = 287,613 tokens over 170 calls = ~1,692 tokens/call, which is the right
+size for batched chunk embedding.
+
+**The real defect is `?? 0`.** It converts *unknown* into *free* — the single most
+dangerous default a spend guard can have. Any model whose cost cannot be determined
+must be **loud**, never silently zero. The rate constant must be keyed by model id,
+and an unknown model with no `neurons` field must log an error rather than record 0.
+
+**Lesson.** CLAUDE.md §7 says *meter from the provider's own usage field, never from
+arithmetic*, and §6 says *prefer measured values*. Both were followed literally and
+still produced a 100% undercount, because **nobody checked that the field being read
+exists**. The reconciliation against the provider — the one test #17's own lesson
+identified as necessary — is what caught it, on the first run it was ever performed.
+Three fixes to this guard have now each passed their own repro (#10, #17, #19); only
+the external comparison found the truth.
