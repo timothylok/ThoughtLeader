@@ -4,6 +4,7 @@ import { num, type AiUsage, type Env, type StartRequest } from './types.ts';
 import { fetchSource, chunk, selectNextSources, normalizeUrl } from './ingest.ts';
 import { recall, remember, chunkKey, findingKey } from './memory.ts';
 import { buildPrompt, parseReasoning, recallQuery } from './prompt.ts';
+import { alert } from './notify.ts';
 import {
   createRun,
   claimSource,
@@ -21,6 +22,10 @@ import {
   neuronsToday,
   usageHistory,
   meterCall,
+  utcDay,
+  getControl,
+  setControl,
+  runningRunCount,
 } from './db.ts';
 
 export { ResearchLoop } from './workflow.ts';
@@ -88,51 +93,123 @@ export default {
   },
 
   /**
-   * Watchdog. Workflows retry internally, but an instance that exhausts its
-   * retries leaves the run stalled with work still queued; this restarts it.
+   * Cron Triggers land here. Cloudflare schedules them in **UTC only** — there
+   * is no local-time or DST handling, so a fixed expression drifts by an hour
+   * against NZ local time between NZST and NZDT.
    */
-  async scheduled(_c: ScheduledController, env: Env): Promise<void> {
-    const { results } = await env.DB.prepare(
-      `SELECT id, topic, goals, iterations, max_iterations
-       FROM runs WHERE status = 'running' AND updated_at < ?`,
-    )
-      .bind(Date.now() - 2 * 60 * 60 * 1000)
-      .all<{
-        id: string;
-        topic: string;
-        goals: string;
-        iterations: number;
-        max_iterations: number;
-      }>();
-
-    // The watchdog restarts stalled runs, which would otherwise be a way to
-    // spend past the daily budget without any /start call.
-    const budget = num(env.DAILY_NEURON_BUDGET, 10_000);
-    if (budget > 0 && (await neuronsToday(env.DB)) >= budget) {
-      console.log('[watchdog] daily neuron budget reached; not restarting anything');
-      return;
-    }
-
-    for (const run of results) {
-      if (run.iterations >= run.max_iterations) continue;
-      if ((await pendingSourceCount(env.DB, run.id)) === 0) continue;
-
-      const generation = Math.floor(Date.now() / 1000);
-      console.log(`[watchdog] restarting ${run.id} at n=${run.iterations}`);
-      await env.LOOP.create({
-        id: `run-${run.id}-gen-${generation}`,
-        params: {
-          runId: run.id,
-          topic: run.topic,
-          goals: JSON.parse(run.goals) as string[],
-          maxIterations: run.max_iterations,
-          startAt: run.iterations,
-          generation,
-        },
-      });
-    }
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    if (controller.cron === DAILY_CRON) return await startDailyRun(env);
+    return await watchdog(env);
   },
 } satisfies ExportedHandler<Env>;
+
+// --- scheduled work --------------------------------------------------------
+
+/** Must match `triggers.crons` in wrangler.jsonc exactly, or it never fires. */
+const DAILY_CRON = '0 16 * * *';
+const DAILY_BRIEF_KEY = 'daily_brief';
+const DAILY_LAST_RUN_KEY = 'daily_last_run';
+
+/**
+ * Start the day's research run from the brief stored in `control.daily_brief`.
+ * Keeping the brief in D1 means changing topic, goals or seeds needs no deploy.
+ */
+async function startDailyRun(env: Env): Promise<void> {
+  const today = utcDay();
+
+  if ((await getControl(env.DB, DAILY_LAST_RUN_KEY)) === today) {
+    console.log(`[daily] already ran for ${today}; skipping`);
+    return;
+  }
+  const running = await runningRunCount(env.DB);
+  if (running > 0) {
+    console.log(`[daily] ${running} run(s) still in flight; skipping`);
+    return;
+  }
+  const budget = num(env.DAILY_NEURON_BUDGET, 10_000);
+  const spent = await neuronsToday(env.DB);
+  if (budget > 0 && spent >= budget) {
+    console.log(`[daily] budget reached (${spent.toFixed(0)}/${budget}); skipping`);
+    return;
+  }
+
+  const raw = await getControl(env.DB, DAILY_BRIEF_KEY);
+  if (!raw) {
+    console.error(`[daily] no brief stored at control['${DAILY_BRIEF_KEY}'] — nothing to run`);
+    await alert(env, 'daily run did NOT start', `No brief stored at control['${DAILY_BRIEF_KEY}'].`);
+    return;
+  }
+  let spec: RunSpec;
+  try {
+    spec = JSON.parse(raw) as RunSpec;
+  } catch (e) {
+    console.error(`[daily] control['${DAILY_BRIEF_KEY}'] is not valid JSON: ${String(e)}`);
+    await alert(env, 'daily run did NOT start', `Brief is not valid JSON: ${String(e)}`);
+    return;
+  }
+
+  // Claim the day BEFORE launching. A cron that fires twice, or a launch that
+  // fails halfway, must not be able to produce two runs spending against one
+  // budget. The cost is that a failed launch is not retried until tomorrow —
+  // the safe direction for an unattended loop, and it is logged as an error.
+  await setControl(env.DB, DAILY_LAST_RUN_KEY, today);
+
+  try {
+    const { runId, seedSources, maxIterations } = await launchRun(env, spec);
+    console.log(
+      `[daily] started ${runId} for ${today}: ${seedSources} seeds, max ${maxIterations} iterations`,
+    );
+  } catch (e) {
+    console.error(`[daily] launch failed for ${today}, no run today: ${String(e)}`);
+    await alert(env, `daily run did NOT start for ${today}`, String(e).slice(0, 800));
+  }
+}
+
+/**
+ * Watchdog. Workflows retry internally, but an instance that exhausts its
+ * retries leaves the run stalled with work still queued; this restarts it.
+ */
+async function watchdog(env: Env): Promise<void> {
+  const { results } = await env.DB.prepare(
+    `SELECT id, topic, goals, iterations, max_iterations
+     FROM runs WHERE status = 'running' AND updated_at < ?`,
+  )
+    .bind(Date.now() - 2 * 60 * 60 * 1000)
+    .all<{
+      id: string;
+      topic: string;
+      goals: string;
+      iterations: number;
+      max_iterations: number;
+    }>();
+
+  // The watchdog restarts stalled runs, which would otherwise be a way to
+  // spend past the daily budget without any /start call.
+  const budget = num(env.DAILY_NEURON_BUDGET, 10_000);
+  if (budget > 0 && (await neuronsToday(env.DB)) >= budget) {
+    console.log('[watchdog] daily neuron budget reached; not restarting anything');
+    return;
+  }
+
+  for (const run of results) {
+    if (run.iterations >= run.max_iterations) continue;
+    if ((await pendingSourceCount(env.DB, run.id)) === 0) continue;
+
+    const generation = Math.floor(Date.now() / 1000);
+    console.log(`[watchdog] restarting ${run.id} at n=${run.iterations}`);
+    await env.LOOP.create({
+      id: `run-${run.id}-gen-${generation}`,
+      params: {
+        runId: run.id,
+        topic: run.topic,
+        goals: JSON.parse(run.goals) as string[],
+        maxIterations: run.max_iterations,
+        startAt: run.iterations,
+        generation,
+      },
+    });
+  }
+}
 
 // --- routes ----------------------------------------------------------------
 
@@ -141,66 +218,106 @@ async function start(request: Request, env: Env): Promise<Response> {
 
   const topic = typeof body.topic === 'string' ? body.topic.trim() : '';
   const goals = Array.isArray(body.goals) ? body.goals.filter((g) => typeof g === 'string') : [];
-  // Seeds go through the SAME normaliser as model-proposed URLs. Without this,
-  // seeds are stored verbatim while proposals are canonicalised, so
-  // UNIQUE(run_id, url) compares two different forms and never collides —
-  // `www.startmate.com/portfolio` and `startmate.com/portfolio` both get fetched
-  // (bugs.md #14). Dedupe within the seed list too.
   const sources = Array.isArray(body.sources)
-    ? [
-        ...new Set(
-          body.sources
-            .filter((s): s is string => typeof s === 'string')
-            .map((s) => normalizeUrl(s))
-            .filter((s): s is string => s !== null),
-        ),
-      ]
+    ? body.sources.filter((s): s is string => typeof s === 'string')
     : [];
 
   if (!topic) return json({ error: 'topic is required' }, 400);
   if (goals.length === 0) return json({ error: 'at least one goal is required' }, 400);
   if (sources.length === 0) return json({ error: 'at least one seed source is required' }, 400);
 
-  const maxIterations = clamp(body.maxIterations ?? 20, 1, 500);
+  let launched: Awaited<ReturnType<typeof launchRun>>;
+  try {
+    launched = await launchRun(
+      env,
+      { topic, goals, sources, maxIterations: body.maxIterations ?? 20 },
+      body.dryRun === true,
+    );
+  } catch (e) {
+    return json({ error: 'failed to start workflow', detail: String(e) }, 502);
+  }
+
+  return json({
+    ...launched,
+    dryRun: body.dryRun === true,
+    topic,
+    goals,
+    estimatedNeurons: launched.maxIterations * 126,
+    watch: `/state?run=${launched.runId}`,
+  });
+}
+
+interface RunSpec {
+  topic: string;
+  goals: string[];
+  sources: string[];
+  maxIterations: number;
+}
+
+/**
+ * The ONE place a run is created. `POST /start` and the daily cron both go
+ * through it, so seed normalisation (bugs.md #14) and the close-on-failed-create
+ * (bugs.md #8, #18) cannot drift apart between two callers — which is exactly
+ * the defect shape CLAUDE.md §9 is about.
+ */
+async function launchRun(
+  env: Env,
+  spec: RunSpec,
+  dryRun = false,
+): Promise<{ runId: string; instanceId: string | null; seedSources: number; maxIterations: number }> {
+  // Seeds go through the SAME normaliser as model-proposed URLs. Without this,
+  // seeds are stored verbatim while proposals are canonicalised, so
+  // UNIQUE(run_id, url) compares two different forms and never collides —
+  // `www.startmate.com/portfolio` and `startmate.com/portfolio` both get fetched
+  // (bugs.md #14). Dedupe within the seed list too.
+  const sources = [
+    ...new Set(
+      spec.sources
+        .filter((s): s is string => typeof s === 'string')
+        .map((s) => normalizeUrl(s))
+        .filter((s): s is string => s !== null),
+    ),
+  ];
+  if (!spec.topic) throw new Error('topic is required');
+  if (spec.goals.length === 0) throw new Error('at least one goal is required');
+  if (sources.length === 0) throw new Error('no usable seed source after normalisation');
+
+  const maxIterations = clamp(spec.maxIterations, 1, 500);
   const runId = crypto.randomUUID().slice(0, 8);
 
-  await createRun(env.DB, runId, topic, goals, maxIterations, sources);
+  await createRun(env.DB, runId, spec.topic, spec.goals, maxIterations, sources);
   await clearStop(env.DB, runId);
 
   // The run row must exist before the workflow starts, or its first step finds
   // no sources. But if instance creation then fails, that row is a zombie:
   // status='running' with work queued, which the watchdog would resurrect
   // hours later into a run nobody started. Fail it closed instead.
-  let instance: WorkflowInstance | null = null;
-  if (body.dryRun) {
+  if (dryRun) {
     // A dry run seeds sources and starts nothing — which leaves precisely the
-    // zombie described above: status='running', sources pending, no instance.
-    // The watchdog resurrects exactly that shape after 2h, so a throwaway dry
-    // run would launch itself later and spend neurons (bugs.md #18). Close it.
+    // zombie described above. The watchdog resurrects exactly that shape after
+    // 2h, so a throwaway dry run would launch itself later and spend neurons
+    // (bugs.md #18). Close it.
     await finishRun(env.DB, runId, 'stopped', null);
-  } else {
-    try {
-      instance = await env.LOOP.create({
-        id: `run-${runId}-gen-0`,
-        params: { runId, topic, goals, maxIterations, startAt: 0, generation: 0 },
-      });
-    } catch (e) {
-      await failRun(env.DB, runId, `workflow create failed: ${String(e)}`);
-      return json({ error: 'failed to start workflow', runId, detail: String(e) }, 502);
-    }
+    return { runId, instanceId: null, seedSources: sources.length, maxIterations };
   }
 
-  return json({
-    runId,
-    instanceId: instance?.id ?? null,
-    dryRun: body.dryRun === true,
-    topic,
-    goals,
-    seedSources: sources.length,
-    maxIterations,
-    estimatedNeurons: maxIterations * 126,
-    watch: `/state?run=${runId}`,
-  });
+  try {
+    const instance = await env.LOOP.create({
+      id: `run-${runId}-gen-0`,
+      params: {
+        runId,
+        topic: spec.topic,
+        goals: spec.goals,
+        maxIterations,
+        startAt: 0,
+        generation: 0,
+      },
+    });
+    return { runId, instanceId: instance.id, seedSources: sources.length, maxIterations };
+  } catch (e) {
+    await failRun(env.DB, runId, `workflow create failed: ${String(e)}`);
+    throw new Error(`workflow create failed for ${runId}: ${String(e)}`);
+  }
 }
 
 async function stop(env: Env, runId: string): Promise<Response> {

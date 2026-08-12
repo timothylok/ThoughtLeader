@@ -17,6 +17,7 @@ import { num, type AiUsage, type Env, type RunParams, type Reasoning, type Termi
 import { fetchSource, chunk, selectNextSources } from './ingest.ts';
 import { recall, remember, chunkKey, findingKey, type Recalled } from './memory.ts';
 import { buildPrompt, parseReasoning, recallQuery, REPORT_SYSTEM } from './prompt.ts';
+import { alert } from './notify.ts';
 import {
   claimSource,
   markSourceResult,
@@ -258,6 +259,16 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
           // retried (bugs.md #19). `synthesise` now meters itself on return.
           const { report, neurons } = await this.synthesise(runId, topic, goals);
           await finishRun(env.DB, runId, terminal!, report);
+          // Inside the step so it is cached with it, rather than re-firing on
+          // every replay of the terminal branch.
+          if (terminal === 'budget-exhausted') {
+            await alert(
+              env,
+              `run ${runId} stopped early: daily neuron budget exhausted at n=${n}`,
+              `A report was still written. Either the brief is too large for the ` +
+                `budget or DAILY_NEURON_BUDGET is set too low.`,
+            );
+          }
           return { terminal, reportChars: report.length, neurons };
         });
         return;
@@ -284,7 +295,12 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
       // successful step afterwards — but marking the run 'failed' here made D1
       // permanently disagree with a workflow that was still running.
       // Rethrow and let Workflows recover; only genuine errors mark the run.
-      if (!isTransient(e)) await failRun(env.DB, runId, String(e));
+      if (!isTransient(e)) {
+        await failRun(env.DB, runId, String(e));
+        // A run that dies unattended must say so. Transient interruptions are
+        // deliberately silent — Workflows recovers from those on its own.
+        await alert(env, `run ${runId} FAILED at n=${n}`, String(e).slice(0, 800));
+      }
       throw e;
     }
   }

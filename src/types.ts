@@ -14,6 +14,13 @@ export interface Env {
   MAX_SOURCE_DEPTH: string;
   /** Hard stop on neurons spent per UTC day, across all runs. 0 = unlimited. */
   DAILY_NEURON_BUDGET: string;
+
+  /**
+   * Slack/Discord webhook for failure alerts. Set with
+   * `wrangler secret put ALERT_WEBHOOK` — never in wrangler.jsonc, it is a
+   * credential. Unset means alerting is silently disabled.
+   */
+  ALERT_WEBHOOK?: string;
 }
 
 /**

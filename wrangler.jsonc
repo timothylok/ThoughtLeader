@@ -42,8 +42,15 @@
   ],
 
   "triggers": {
-    // Watchdog: restarts runs stalled for >2h with work still queued.
-    "crons": ["*/30 * * * *"]
+    // Cron Triggers are UTC ONLY — no local time, no DST. These drift by an
+    // hour against NZ time between NZST (UTC+12) and NZDT (UTC+13).
+    //
+    // */30  watchdog: restarts runs stalled for >2h with work still queued.
+    // 0 16  daily research run from control['daily_brief'] (src/index.ts
+    //       DAILY_CRON must match this string exactly or it never fires).
+    //       16:00Z = 04:00 NZST; a 6-iteration run at ITERATION_INTERVAL=18min
+    //       takes ~1.8h, so the report is written by ~05:50 NZST.
+    "crons": ["*/30 * * * *", "0 16 * * *"]
   },
 
   "vars": {

@@ -199,6 +199,31 @@ export async function clearStop(db: D1Database, runId: string): Promise<void> {
   await db.prepare(`DELETE FROM control WHERE key = ?`).bind(stopKey(runId)).run();
 }
 
+// --- generic control values ------------------------------------------------
+
+export async function getControl(db: D1Database, key: string): Promise<string | null> {
+  const row = await db
+    .prepare(`SELECT value FROM control WHERE key = ?`)
+    .bind(key)
+    .first<{ value: string }>();
+  return row?.value ?? null;
+}
+
+export async function setControl(db: D1Database, key: string, value: string): Promise<void> {
+  await db
+    .prepare(`INSERT OR REPLACE INTO control (key, value) VALUES (?, ?)`)
+    .bind(key, value)
+    .run();
+}
+
+/** Runs currently in `status='running'`, whatever started them. */
+export async function runningRunCount(db: D1Database): Promise<number> {
+  const row = await db
+    .prepare(`SELECT COUNT(*) AS n FROM runs WHERE status = 'running'`)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
 // --- neuron budget ---------------------------------------------------------
 
 export const utcDay = (at = Date.now()): string => new Date(at).toISOString().slice(0, 10);
