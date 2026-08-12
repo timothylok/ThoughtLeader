@@ -184,6 +184,42 @@ of it, not the whole of it.
 
 ---
 
+## 10. Unknown Is Not Zero
+
+**A default that turns "I couldn't measure this" into "this was free" will never
+raise an alarm.**
+
+The spend guard in this project was wrong three times, and each fix passed its own
+test:
+
+- #17 estimated embeddings with arithmetic and omitted two call sites → **21% low**.
+- #19 replaced that with exact figures but summed them at the *end* of a retryable
+  step, while the provider bills **every attempt** → lost every retried call.
+- #21 replaced *that* with `usage.neurons` — a field embedding responses **do not
+  return** — so `?? 0` recorded them as free → **100% low** on 6% of spend.
+
+Each fix was more "correct" than the last and each shipped a new silent undercount.
+The pattern is not carelessness about arithmetic; it is a default that fails quiet:
+
+```ts
+const cost = res.usage?.neurons ?? 0;   // "unknown" and "free" are now the same value
+```
+
+- **Verify the field exists before building on it.** "The provider returns X" is a
+  claim about a specific model, not the API. Print the raw response for *each* model
+  you call.
+- **Make unpriceable loud.** Log an error naming the model; never silently record 0.
+- **Reconcile against the provider, not against yourself.** A guard checked against
+  its own computation always passes. One command comparing `/usage` to Cloudflare's
+  analytics found what three rounds of code review did not.
+- **Ask what a clean run cannot prove.** The verification run confirmed call-site
+  coverage and was structurally incapable of testing retry accounting.
+
+The test: for every number your guard reports, can you name the external source you
+checked it against — and the case where it would read low without failing?
+
+---
+
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites
 due to overcomplication, clarifying questions come before implementation rather than
 after mistakes, the risks named during planning get measured rather than assumed, and

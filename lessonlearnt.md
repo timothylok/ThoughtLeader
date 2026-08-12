@@ -402,3 +402,89 @@ line looks like diligence.**
 The corrections are all in `bugs.md`. Every one of them came from the same place as
 the bugs: reading the code or the measurement instead of trusting the last thing I
 wrote down.
+
+---
+
+## 9. Addendum — session 3, 2026-08-12
+
+Two verifications, four bugs, and one uncomfortable pattern that only became visible
+because the verifications were run at all.
+
+### The guard was wrong three times, and each fix passed its own test
+
+Session 2 closed bug #17 — the spend guard reading 21% low — and recorded it as
+fixed. It was not. Reconciling `/usage` against Cloudflare's own analytics found two
+further defects behind it:
+
+| | What it did | How wrong |
+|---|---|---|
+| #17 | estimated embeddings, omitted the report call and the recall embed | 21% low |
+| #19 | summed exact figures at *step* end, while Cloudflare bills every retried attempt | lost every retry |
+| #21 | read `usage.neurons` on embeddings, which do not return that field | 100% low on embeddings |
+
+Each fix was more principled than the one before. #17 replaced arithmetic with
+measurement, exactly as the repo's own rules demand. #19 fixed *when* the measurement
+was recorded. #21 was the one that mattered most and was invisible to every previous
+check, because `res.usage?.neurons ?? 0` makes *unknown* and *free* the same number.
+
+The generalisable form, now CLAUDE.md §10: **a default that fails quiet cannot raise
+an alarm.** The three fixes were all improvements and all shipped a fresh silent
+undercount, because none of them asked whether the field being read existed for the
+model being called.
+
+### The only test that worked was the external one
+
+Three rounds of code review — including one explicitly hunting for "a fourth leak" —
+found the two extra call sites but never questioned the field itself. What found it
+was one command comparing our number to Cloudflare's:
+
+```
+reasoning  75.39326477050781  vs  75.39326477050781   exact, 14 dp
+embedding  0                  vs  1.203904999782      -100%
+```
+
+The split by `modelId` is what made it legible: had the totals been compared alone,
+a 1.57% gap would have looked like rounding. **Reconcile per-component, not in
+aggregate — an exact match on one component and a total failure on another sum to
+something that looks like noise.**
+
+Worth stating plainly: the user asked for this reconciliation specifically, and
+flagged a fourth leak as "a live possibility rather than a formality." That framing
+was correct and the code review was not.
+
+### Assertions in docs are load-bearing, and this one cost a run
+
+The verification was scheduled for 00:05 UTC because `HANDOFF.md` said the allocation
+"resets at UTC midnight." Nobody had measured it. The run fired on time, with our
+meter reading 0 for the new day, and was refused; a probe six minutes later
+succeeded. The allocation is not a calendar day (#20) — hourly data shows the only
+sum reaching 10,000 spans the previous midnight.
+
+This is the third time in this project a **sentence in a document**, not a line of
+code, was the defect — after the README's subrequest justification (#1) and its CPU
+claim (#15). The habit that replaced it: **probe the condition, don't trust the
+clock.** The retry script now tests for capacity instead of waiting for a time.
+
+### What a passing test cannot tell you
+
+The verification run confirmed #13 and call-site coverage. It was structurally
+incapable of testing #19's retry accounting, because a run with no retries never
+exercises the path. Saying so at the time mattered more than the pass did — a green
+result on a test that cannot fail is the same shape as the bug it was meant to catch.
+
+### What I got wrong in this session
+
+- I stated the analytics/enforcement gap was "two counters that genuinely disagree,"
+  having re-queried 75 minutes apart and seen no movement. The hourly breakdown
+  showed a rolling-window mismatch instead. The evidence I had was consistent with
+  both; I picked one and asserted it.
+- I misread the 4006 cutoff as 20:16Z when it was 04:15Z, which made the window
+  hypothesis harder to see for longer than it needed to be.
+- I deployed a config change at 00:05:16Z while a scheduled run fired at 00:05:53Z.
+  The gate passed honestly — nothing *was* running — but it only checks for work in
+  flight, not work armed to start seconds later. It landed safely by ~37 seconds, by
+  luck rather than design. **A gate that cannot see the thing about to happen is not
+  a gate for that thing.**
+- I claimed the 1,841 neurons/M rate "reproduces Cloudflare's figure exactly" from a
+  check that was circular — the token count was itself derived from the rate. The
+  honest validation came later, from an independent 9-token call.
