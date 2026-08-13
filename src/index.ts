@@ -453,6 +453,12 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
     await markSourceResult(env.DB, source.id, 0, ingestError);
   }
 
+  // Same rule as the workflow: attribute the finding only to a source that
+  // actually contributed material, keyed on chunks rather than on the error flag
+  // (bugs.md #22). Without this, /step is a second writer that violates the
+  // invariant the workflow now upholds — which is exactly how #12 became #14.
+  const contributedUrl = chunks > 0 ? source.url : null;
+
   const recalled = await recall(
     env,
     runId,
@@ -468,7 +474,7 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
       fresh,
       recalled.items,
       prior,
-      ingestError ? null : source.url,
+      contributedUrl,
     ),
     max_tokens: 700,
     temperature: 0.4,
@@ -478,9 +484,9 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
   await meterCall(env.DB, env.REASON_MODEL, res.usage);
 
   const reasoning = parseReasoning(res.response);
-  await recordFinding(env.DB, runId, n, source.url, reasoning);
+  await recordFinding(env.DB, runId, n, contributedUrl, reasoning);
   await remember(env, runId, [
-    { key: findingKey(n), text: reasoning.finding, sourceUrl: source.url, type: 'finding', n },
+    { key: findingKey(n), text: reasoning.finding, sourceUrl: contributedUrl ?? '', type: 'finding', n },
   ]);
   // /step spends real neurons, so it counts against the same daily budget —
   // otherwise testing is a blind spot in the spend guard. Each call recorded

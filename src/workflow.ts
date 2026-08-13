@@ -143,6 +143,18 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
           },
         );
 
+        // The URL to attribute this iteration's finding to — null unless the
+        // source actually contributed material. A fetch that 403s still claims a
+        // source from the queue, and reasoning still runs (usefully) on recalled
+        // memory; stamping the finding with that URL asserts it was the origin of
+        // content it never supplied, and the citation reaches the report
+        // (bugs.md #22).
+        //
+        // Keyed on `chunks`, NOT on `error`: a fetch can succeed and yield zero
+        // chunks (empty body, nothing after boilerplate stripping), which is the
+        // same violation one branch away (CLAUDE.md §9).
+        const contributedUrl = ingested.chunks > 0 ? ingested.url : null;
+
         // 3. Recall the most relevant memory for the goals. The query embedding
         //    is a real AI call and used to go entirely uncounted (bugs.md #17).
         const recalled = await step.do(
@@ -164,7 +176,7 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
               ingested.excerpts,
               recalled.items,
               prior,
-              ingested.error ? null : ingested.url,
+              contributedUrl,
             );
             const res = (await env.AI.run(env.REASON_MODEL, {
               messages,
@@ -180,13 +192,16 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
 
         // 5. Commit: finding to D1, finding to vector memory, new sources queued.
         const recorded = await step.do(`record:${n}`, async () => {
-          const findingId = await recordFinding(env.DB, runId, n, ingested.url, reasoning);
+          const findingId = await recordFinding(env.DB, runId, n, contributedUrl, reasoning);
 
           const remembered = await remember(env, runId, [
             {
               key: findingKey(n),
               text: reasoning.finding,
-              sourceUrl: ingested.url ?? '',
+              // Also `contributedUrl`: recalled excerpts carry their sourceUrl
+              // into later prompts, so a false attribution here propagates
+              // forward instead of staying in one row (bugs.md #22).
+              sourceUrl: contributedUrl ?? '',
               type: 'finding',
               n,
             },
@@ -318,7 +333,14 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
     // demands a citation and the model supplies one anyway — either the bare
     // `[n]` index or a URL reconstructed from an entity name (bugs.md #13).
     const body = findings
-      .map((f) => `[${f.n}] SOURCE: ${f.source_url || '(no source recorded)'}\n${f.finding}`)
+      // A finding with no source_url was synthesised from recalled material, not
+      // read from a page. Saying so explicitly stops the report inventing an
+      // attribution for it — closing the table side of #22 alone would leave the
+      // false citation free to reappear in the deliverable.
+      .map(
+        (f) =>
+          `[${f.n}] SOURCE: ${f.source_url || 'NONE — synthesised from earlier material; do NOT cite a URL for this finding'}\n${f.finding}`,
+      )
       .join('\n\n');
     const res = (await this.env.AI.run(this.env.REASON_MODEL, {
       messages: [
