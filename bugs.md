@@ -27,6 +27,8 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [19](#bug-19--the-meter-counts-steps-cloudflare-bills-attempts) | The meter counts steps; Cloudflare bills attempts | 🔴 Guard failure | Fixed, **unverified** |
 | [20](#bug-20--daily_neuron_budget-resets-on-a-utc-day-cloudflares-allocation-does-not) | `DAILY_NEURON_BUDGET` resets on a UTC day; Cloudflare's allocation does not | 🟠 Guard shape | **Open** (mitigated) |
 | [21](#bug-21--embeddings-return-no-neurons-field-so--0-meters-them-as-free) | Embeddings return no `neurons` field, so `?? 0` meters them as free | 🔴 Guard failure | **Fixed & measured** |
+| [22](#bug-22--a-finding-is-attributed-to-a-source-that-returned-no-content) | A finding is attributed to a source that returned no content | 🟠 Traceability | **Open** |
+| [23](#bug-23--the-usage-ledger-has-no-model-column-so-the-reconciliation-rule-cannot-be-run) | The usage ledger has no model column, so the reconciliation rule cannot be run | 🟡 Guard observability | **Open** |
 
 ---
 
@@ -855,3 +857,116 @@ exists**. The reconciliation against the provider — the one test #17's own les
 identified as necessary — is what caught it, on the first run it was ever performed.
 Three fixes to this guard have now each passed their own repro (#10, #17, #19); only
 the external comparison found the truth.
+
+---
+
+## Bug 22 — A finding is attributed to a source that returned no content
+
+**Severity:** 🟠 Traceability · **Status:** **Open** · found 2026-08-13 reading the first
+unattended daily run `4306b012`
+
+**How it showed up.** Iteration 3 claimed `https://innovationaus.com/feed` as its
+source and reported a specific figure:
+
+> *"The technology sector in Australia is the fastest-growing productivity engine,
+> contributing $248.5 billion (8.9% of GDP)…"* — `source_url: https://innovationaus.com/feed`
+
+That source **failed**: `HTTP 403`, `chunks: 0`. It contributed no text to the run.
+The same $248.5bn figure appears again at iteration 5, attributed to
+`Economy_of_Australia`, which was fetched **two iterations later**.
+
+**What is actually wrong.** The iteration's `source_url` is the URL claimed from the
+queue, and it is written onto the finding regardless of whether the fetch produced
+anything. When ingest yields nothing the reasoning step still runs — on recalled
+memory from previous iterations — and the resulting finding is stamped with the URL
+that failed. The content is not necessarily fabricated (the figure is plausibly real
+and recalled from the Tech Council feed read at iteration 2), but the **attribution
+is wrong**, and it is wrong in the direction that looks like evidence.
+
+This is bug #13's neighbour, not a regression of it. #13 made citations real URLs
+from the `SOURCE:` line, and that still holds — every URL in this report is real.
+#13 fixed *what a citation points at*; it did not establish that the thing it points
+at **contributed anything**.
+
+**Invariant to close:** *a finding's `source_url` yielded at least one chunk.*
+Every writer to `recordFinding` needs checking, not just the workflow path —
+`/step` in `index.ts` writes findings too (CLAUDE.md §9).
+
+**Candidate fixes (none applied).** Either skip the reasoning step entirely when
+`chunks === 0` and mark the iteration as a fetch failure, or let it run on recall
+but record `source_url = null` / an explicit `recall-only` marker so the report
+cannot present it as sourced. The second is probably right — the recall is doing
+useful work; only the attribution is false.
+
+**The 403 was transient — corrected 2026-08-13.** The first reading of this run
+recorded the seed as bot-blocked and recommended removing it. Probing it through the
+Worker's own ingest path (`POST /step {"probe": …}`) **five times returned 200 with
+15,660 bytes / 13 chunks every time**, in 8–14 ms. All five seeds fetch. Nothing was
+removed.
+
+That correction makes this bug **more** important, not less. A permanently blocked
+seed fails once and gets deleted; a seed that fails intermittently keeps producing
+zero-chunk iterations, and every one of them mints a finding attributed to a source
+that contributed nothing. This will recur.
+
+**The method note is the real lesson.** "Bot-blocked" was inferred from a single
+observation inside a run and written into two documents as a property of the source.
+One command through the actual pipeline disproved it. CLAUDE.md §6 — *re-measure
+rather than extrapolate from one sample* — applies to failures exactly as it does to
+timings, and a failure is the easier one to over-read, because it arrives with an
+explanation attached.
+
+---
+
+## Bug 23 — The `usage` ledger has no model column, so the reconciliation rule cannot be run
+
+**Severity:** 🟡 Guard observability · **Status:** **Open** · found 2026-08-13
+reconciling run `4306b012`
+
+**How it showed up.** The post-run reconciliation for UTC 2026-08-12:
+
+| | Neurons | Calls |
+|---|---|---|
+| `/usage` (ours) | 1079.800795738281 | 32 |
+| Cloudflare — `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 929.4913461208344 | 11 |
+| Cloudflare — `@cf/baai/bge-small-en-v1.5` | 152.91250247231102 | 26 |
+| **Cloudflare total** | **1082.4038485931454** | **37** |
+| **Delta** | **−2.6031 (0.24% low)** | **−5** |
+
+The 5-call gap is the expected benign shape: run `04fc1149` was refused with `4006`
+at ~00:05Z, and refused calls appear in Cloudflare's `count` while costing nothing
+and correctly recording nothing (same as #21's 3-call gap).
+
+**The 2.6031 neurons are not explained by refusals**, and there are at least two
+explanations that fit:
+
+1. **Account-wide spend our ledger cannot see.** The #21 investigation made direct
+   REST calls to both models on this same UTC day, bypassing the Worker entirely —
+   one llama probe alone is recorded in #21 as `neurons: 1.3963143825531006`, and a
+   direct embed as `0.016567499997`. Cloudflare's figure is account-wide; ours is
+   Worker-wide. These are *supposed* to differ.
+2. **Our embedding rate is slightly low.** Embeddings are the only category still
+   priced by our own arithmetic (`db.ts` — `total_tokens × 1841 / 1e6`). 2.6031 is
+   **1.70% of Cloudflare's embedding total**, which is the right order for a rate
+   constant being marginally off.
+
+**The bug is that these cannot be told apart.** `usage` is `(day, neurons, calls)`
+with no model column, so our side cannot be split the way Cloudflare's is.
+`HANDOFF.md` rule 3 says *"compare per model, not in aggregate — an exact match on
+reasoning plus a 100% miss on embeddings sums to something that looks like noise"* —
+and that rule is currently **unexecutable against our own ledger**. Explanation 1 is
+benign and explanation 2 is #21's successor; a 0.24% aggregate delta is exactly the
+shape that would hide either one.
+
+**Fix (not applied).** Add `model` to the `usage` table and group by
+`(day, model)` — `meterCall` already receives the model id and is the single
+writer, so this is a schema change plus one changed `INSERT`, and it makes the
+per-model comparison a query instead of an inference. Worth doing together with
+#20's per-hour rows, since both are the same `usage` schema change.
+
+**Lesson.** #21's lesson was *reconcile against the provider, not against yourself*.
+That was adopted as a rule and written into the handoff — but the data structure it
+depends on was never built, so the second time the rule was applied it could only
+produce an aggregate number and a hypothesis. **A verification habit needs the
+instrumentation that makes it decisive, or it degrades into a number you have to
+argue about.** The direction of the error is still the one that matters: low.
