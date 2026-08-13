@@ -21,6 +21,7 @@ import {
   finishRun,
   neuronsToday,
   usageHistory,
+  usageByModel,
   meterCall,
   utcDay,
   getControl,
@@ -60,6 +61,11 @@ export default {
             neuronsToday: await neuronsToday(env.DB),
             dailyBudget: num(env.DAILY_NEURON_BUDGET, 10_000),
             freeAllocation: 10_000,
+            // Per model, so this endpoint can be compared directly against
+            // Cloudflare's aiInferenceAdaptiveGroups (README §5.2, bugs.md #23).
+            // An aggregate-only figure hid #21's 100% embedding miss inside a
+            // 1.57% total.
+            byModel: await usageByModel(env.DB, url.searchParams.get('day') ?? undefined),
             history: await usageHistory(env.DB),
           });
         case 'GET /search':

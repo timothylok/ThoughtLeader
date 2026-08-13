@@ -28,7 +28,7 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [20](#bug-20--daily_neuron_budget-resets-on-a-utc-day-cloudflares-allocation-does-not) | `DAILY_NEURON_BUDGET` resets on a UTC day; Cloudflare's allocation does not | 🟠 Guard shape | **Open** (mitigated) |
 | [21](#bug-21--embeddings-return-no-neurons-field-so--0-meters-them-as-free) | Embeddings return no `neurons` field, so `?? 0` meters them as free | 🔴 Guard failure | **Fixed & measured** |
 | [22](#bug-22--a-finding-is-attributed-to-a-source-that-returned-no-content) | A finding is attributed to a source that returned no content | 🔴 False attribution | ✅ **Fixed & verified** (`8ca445dd`, runs `63ac5d92` / `797a52f2`) |
-| [23](#bug-23--the-usage-ledger-has-no-model-column-so-the-reconciliation-rule-cannot-be-run) | The usage ledger has no model column, so the reconciliation rule cannot be run | 🟡 Guard observability | **Open** — ambiguity it caused is now resolved (clean run `9174a7bc`) |
+| [23](#bug-23--the-usage-ledger-has-no-model-column-so-the-reconciliation-rule-cannot-be-run) | The usage ledger has no model column, so the reconciliation rule cannot be run | 🟡 Guard observability | ✅ **Fixed & verified** (`764f7709`, per-model delta match) |
 
 ---
 
@@ -1096,3 +1096,68 @@ where there is nothing to cite; worth a look if it shows up in a real mixed run.
 `workflow create failed: Error: internal error` (`b063f5e2`) and was correctly closed
 as `failed` with 0 iterations — **#8 and #18 holding under a real failure**, not a
 simulated one.
+
+### Fixed & verified 2026-08-13, version `764f7709`
+
+`usage` is now one row per **(day, model)** instead of one per day:
+
+```sql
+CREATE TABLE usage (
+  day TEXT NOT NULL, model TEXT NOT NULL,
+  neurons REAL NOT NULL DEFAULT 0, calls INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, model)
+);
+```
+
+`meterCall` already had the model id and is the single writer, so `addNeurons`
+took one extra argument. `GET /usage` gained a `byModel` block (and an optional
+`?day=`), which is the shape `aiInferenceAdaptiveGroups` reports — the two sides
+can now be compared like for like.
+
+**The dangerous part was not the column, it was `neuronsToday`.** It read
+`SELECT neurons FROM usage WHERE day = ?` — a *single row*. Against a per-model
+table that returns whichever model SQLite happens to hand back first, so the guard
+would have reported one model's spend as the whole day's and authorised several
+times the budget. It is now `COALESCE(SUM(neurons), 0)`. Every read of the table
+was audited, not just the one the bug named: `neuronsToday` (SUM), `usageHistory`
+(GROUP BY day), `usageByModel` (new).
+
+**Migration.** Old rows carry the literal model `(pre-#23: model not recorded)`
+rather than being assigned to a model or dropped — an honest unknown, per §10.
+Totals were captured before and after: **10037.851645107545 neurons / 113 calls on
+both sides, identical to the last digit.**
+
+Order matters and there is an unavoidable window: the migrated schema breaks the old
+code's `ON CONFLICT(day)`, and the new code breaks against the old schema. Migrate
+then deploy back to back, with nothing running — verified no run in flight before
+each half, ~6 h clear of the daily cron.
+
+**Verification — a real per-model reconciliation, which is the thing that was
+impossible before.** Baseline both sides, spend on both models via `/step`, compare
+the deltas:
+
+| model | CF delta | ours | diff | calls |
+|---|---|---|---|---|
+| `llama-3.3-70b-instruct-fp8-fast` | 129.2331 | 129.2331 | **0.0000** | 1/1 |
+| `bge-small-en-v1.5` | 11.3690 | 11.3700 | +0.0010 | 3/3 |
+
+Neurons and call counts match per model. The +0.0010 on embeddings is +0.0088%,
+which is the published-rate rounding #21 measured (0.009%) — the same signature
+seen at every scale so far.
+
+**A flaw in the verification itself, worth more than the fix.** The first attempt
+compared against analytics that had only partly landed and printed `FAIL`: the
+poll broke out as soon as *any* model's count moved, showing llama at 0 while bge
+was mid-flight. The memory note says *re-query until the figure stops moving* — and
+"stops moving" means **every series stable across two consecutive reads**, not
+"something changed." Polling to first movement produces a confident wrong answer,
+in whichever direction the lag happens to fall.
+
+**Not fixed, and not attempted:** #20's window shape. The trailing-24h fix needs
+per-*hour* rows, and this migration deliberately did not add them — it would have
+meant changing what the guard measures at the same time as changing where it stores
+it, and those want separate verification. The table is now easier to extend that way.
+
+**What this does not prove.** Only two models were exercised, both already known to
+`priceCall`. A model with no entry in the rate table still routes to the loud
+`console.error` path from #21; that branch remains untested here.

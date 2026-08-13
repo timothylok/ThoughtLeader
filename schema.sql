@@ -48,13 +48,21 @@ CREATE TABLE IF NOT EXISTS control (
   value TEXT NOT NULL
 );
 
--- Neuron spend per UTC day, account-wide across all runs.
+-- Neuron spend per UTC day AND model, account-wide across all runs.
 -- Cloudflare budget alerts do NOT cap usage and fire a day late, so on a Paid
 -- plan this table is the only thing standing between a runaway loop and a bill.
+--
+-- Split per model (bugs.md #23): Cloudflare's analytics reports by model, so a
+-- day-only total can only ever be compared in aggregate — and an exact match on
+-- one model plus a 100% miss on another sums to something that looks like noise.
+-- That is not hypothetical; it is exactly what #21 was, hidden inside a 1.57%
+-- total. Reconciliation has to compare like for like.
 CREATE TABLE IF NOT EXISTS usage (
-  day     TEXT PRIMARY KEY,   -- YYYY-MM-DD (UTC)
+  day     TEXT NOT NULL,      -- YYYY-MM-DD (UTC)
+  model   TEXT NOT NULL,      -- Workers AI model id, as passed to AI.run
   neurons REAL NOT NULL DEFAULT 0,
-  calls   INTEGER NOT NULL DEFAULT 0
+  calls   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, model)
 );
 
 -- One finding per (run, iteration). Without this, a step that fails AFTER the

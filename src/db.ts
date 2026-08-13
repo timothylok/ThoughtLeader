@@ -278,30 +278,38 @@ export async function meterCall(
   usage: AiUsage | undefined,
 ): Promise<number> {
   const neurons = priceCall(model, usage);
-  await addNeurons(db, neurons);
+  await addNeurons(db, model, neurons);
   return neurons;
 }
 
-/** Accumulate spend for today and return the new running total. */
+/** Accumulate spend for today against ONE model, and return that model's total. */
 async function addNeurons(
   db: D1Database,
+  model: string,
   neurons: number,
 ): Promise<number> {
   const day = utcDay();
   const row = await db
     .prepare(
-      `INSERT INTO usage (day, neurons, calls) VALUES (?1, ?2, 1)
-       ON CONFLICT(day) DO UPDATE SET neurons = neurons + ?2, calls = calls + 1
+      `INSERT INTO usage (day, model, neurons, calls) VALUES (?1, ?2, ?3, 1)
+       ON CONFLICT(day, model) DO UPDATE SET neurons = neurons + ?3, calls = calls + 1
        RETURNING neurons`,
     )
-    .bind(day, neurons)
+    .bind(day, model, neurons)
     .first<{ neurons: number }>();
   return row?.neurons ?? 0;
 }
 
+/**
+ * The guard's number: today's spend across ALL models.
+ *
+ * Must SUM, not SELECT — the table is now one row per (day, model), so reading a
+ * single row would silently report one model's spend as the whole day's and the
+ * guard would authorise several times the budget.
+ */
 export async function neuronsToday(db: D1Database): Promise<number> {
   const row = await db
-    .prepare(`SELECT neurons FROM usage WHERE day = ?`)
+    .prepare(`SELECT COALESCE(SUM(neurons), 0) AS neurons FROM usage WHERE day = ?`)
     .bind(utcDay())
     .first<{ neurons: number }>();
   return row?.neurons ?? 0;
@@ -309,8 +317,26 @@ export async function neuronsToday(db: D1Database): Promise<number> {
 
 export async function usageHistory(db: D1Database, days = 14) {
   const { results } = await db
-    .prepare(`SELECT day, neurons, calls FROM usage ORDER BY day DESC LIMIT ?`)
+    .prepare(
+      `SELECT day, SUM(neurons) AS neurons, SUM(calls) AS calls
+       FROM usage GROUP BY day ORDER BY day DESC LIMIT ?`,
+    )
     .bind(days)
+    .all();
+  return results;
+}
+
+/**
+ * Per-model spend for one UTC day — the shape Cloudflare's `aiInferenceAdaptiveGroups`
+ * reports, so `/usage` can be compared against the provider model by model instead
+ * of as one aggregate (bugs.md #23). Defaults to today.
+ */
+export async function usageByModel(db: D1Database, day = utcDay()) {
+  const { results } = await db
+    .prepare(
+      `SELECT model, neurons, calls FROM usage WHERE day = ? ORDER BY neurons DESC`,
+    )
+    .bind(day)
     .all();
   return results;
 }
