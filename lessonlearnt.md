@@ -488,3 +488,114 @@ result on a test that cannot fail is the same shape as the bug it was meant to c
 - I claimed the 1,841 neurons/M rate "reproduces Cloudflare's figure exactly" from a
   check that was circular — the token count was itself derived from the rate. The
   honest validation came later, from an independent 9-token call.
+
+---
+
+## 10. Addendum — session 4, 2026-08-13
+
+The session began by **reading the first unattended run instead of building on it**.
+That choice is the whole session: nothing on the plan would have found either bug.
+
+### A citation surface fails in more ways than one
+
+Bug #13 (session 2) stopped the report citing iteration numbers as if they were
+sources, and it held — every URL in every report since has been real. Bug #22 is what
+was left: a real URL, correctly formatted, attached to a fetch that **returned
+nothing**. The failing seed 403'd, the reasoning step ran anyway on recalled memory,
+and the finding was stamped with the URL that had just failed. Two runs later that
+attribution reached the final report as a citation under a specific dollar figure.
+
+Three failure modes on one surface, found one at a time:
+
+| | What was wrong | Fixed by |
+|---|---|---|
+| #12 | the URL did not exist | `normalizeUrl()` + grounding |
+| #13 | the citation was an iteration number | `SOURCE:` line in the prompt |
+| #22 | the URL was real but supplied none of the content | `contributedUrl = chunks > 0 ? url : null` |
+
+Each fix was correct and none of them implied the next. **"The citation is real" and
+"the citation is true" are different properties**, and only the second one is what a
+research report is for.
+
+Two details of the fix mattered more than the fix:
+
+- **Keyed on `chunks`, not on `error`.** The incident was a 403, so an error-keyed
+  guard would have passed its own repro and missed a 200 that yields zero chunks —
+  the same invariant violated over a different dimension. That is precisely the trap
+  #17→#19→#21 fell into three times.
+- **Six sites, two paths.** Grepping the invariant rather than fixing the reported
+  line found the D1 row, the Vectorize metadata, and the prompt's "JUST READ" header
+  on *both* the workflow and `/step`. The vector one propagates: a false attribution
+  written to memory is recalled into later iterations' prompts.
+
+### A verification rule needs the instrumentation that makes it decisive
+
+Session 3's lesson was *reconcile against the provider, not against yourself*, and it
+was written into the handoff as a standing rule. The next time it was applied it
+produced a 0.24% aggregate delta and two competing explanations — because the rule
+says *compare per model* and our ledger had no model column (#23). The rule was
+adopted; the data structure it depends on was never built.
+
+That is a distinct failure from forgetting a lesson. **A habit that cannot return a
+decisive answer degrades into a number you argue about**, and the argument is
+comfortable because the number is small. The fix was one column and one changed
+`INSERT`. The dangerous part was not the column but `neuronsToday()`, which read a
+*single row*: against a per-model table it would have reported one model's spend as
+the whole day's and let the guard authorise several times the budget. **Adding a
+dimension to a table changes the meaning of every existing read of it.**
+
+### Repetition is not replication
+
+The same reasoning error three times in one session, twice on the same seed:
+
+1. One in-run 403 → "the seed is bot-blocked," written into two documents as a
+   property of the source and a recommendation to delete it.
+2. Five probes returning 200 → "the 403 was transient." Those five were consecutive
+   requests in one burst, down one connection, seconds apart — closer to *one*
+   sample than five.
+3. One late, sparse monitor → "it is not a liveness signal," recorded as a design
+   verdict. The next run emitted all six events on time.
+
+Every one of these treated correlated observations as independent evidence, and each
+was stated with more confidence than the evidence carried. The honest statement about
+the seed is still uncomfortable and still correct: **it fails in runs (0/3) and
+succeeds in probe bursts (5/5), and nobody knows why.** Before quoting an n, state
+what varied across the trials. Failures are the easier case to over-read, because
+they arrive with an explanation already attached.
+
+### The unattended run is the verification that counts
+
+Both fixes were verified before deploying — #22 against a manufactured 404 seed, #23
+against a hand-built `/step` exercise. Both passed. Then the 16:00Z daily run
+exercised them **against the original incident, unprompted**: the same seed 403'd for
+the third time, iteration 3 recorded `source_url = null`, and the report cited it
+nowhere — the $248.5bn figure now attributed to the two sources that actually supplied
+it. The per-model reconciliation came back exact on reasoning and +0.0091% on
+embeddings, the published-rate rounding for the fourth time at a fourth scale.
+
+A manufactured test proves the code does what you wrote. **The unattended run is the
+only thing that proves you fixed the thing that happened.**
+
+### What a clean run still cannot prove
+
+Three reconciliations in a row have now been of runs where nothing failed after an AI
+call returned, so **#19's retry accounting is exactly as untested as it was two
+sessions ago** — while the accumulating PASSes make the meter feel proven. Testing it
+means deliberately failing a step after its AI call. Worth saying every time, because
+a green result on a test that cannot fail is the same shape as the bug it was meant to
+catch.
+
+### What I got wrong in this session
+
+- Called a seed bot-blocked from one observation, then over-corrected from a probe
+  burst, then generalised a monitor design verdict from one bad run. Same error, three
+  times, in a session whose whole subject was over-reading single samples.
+- Reported the daily run's cost as ~930 neurons when 929.49 was the day's *reasoning*
+  total across all runs — the isolation the number implied did not exist until #23 was
+  fixed later that day.
+- Broke a poll loop on the first sign of movement in the analytics and printed a
+  confident `FAIL`. "Stops moving" means every series stable across two consecutive
+  reads, not "something changed."
+- Kept treating the refreshed RSS feed as a confound to be apologised for across three
+  runs, when three-for-three it was the finding: on this source profile, **the seeds
+  that pay are the ones that change**.

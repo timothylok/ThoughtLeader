@@ -220,6 +220,39 @@ checked it against — and the case where it would read low without failing?
 
 ---
 
+## 11. Repetition Is Not Replication
+
+**Correlated observations are not independent evidence, however many of them you have.**
+
+Three times in one session here a confident claim rested on samples that were not
+independent:
+
+- One in-run `403` became *"the seed is bot-blocked"* — written into two documents as a
+  property of the source, with a recommendation to delete it.
+- The correction over-shot: five probes returning `200` became *"the 403 was
+  transient."* Those five were consecutive requests in a single burst, one connection,
+  seconds apart — closer to **one** sample than to five.
+- One late, sparse monitor run became *"it is not a liveness signal"* — a design
+  verdict from n=1. The next run performed perfectly.
+
+- **Before quoting an n, state what varied across the trials.** A different connection,
+  a different hour, a different code path. If nothing varied, you have one observation
+  repeated, and the honest n is 1.
+- **Failures are the easier case to over-read**, because they arrive with an
+  explanation already attached. A `403` *looks* like bot-blocking, so the hypothesis
+  arrives pre-confirmed.
+- **Name the contexts that disagree instead of picking one.** *"Fails in runs 0/3,
+  succeeds in probe bursts 5/5, cause unknown"* is more useful than either verdict, and
+  it points at the thing actually worth investigating — the difference between the two
+  contexts.
+- Applies to timings and costs identically (§6, *re-measure rather than extrapolate*).
+  This is the same rule pointed at failures and at qualitative judgements.
+
+The test: if you are about to write a property of a thing rather than a description of
+an event, ask how many *independent* observations support it.
+
+---
+
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites
 due to overcomplication, clarifying questions come before implementation rather than
 after mistakes, the risks named during planning get measured rather than assumed, and

@@ -27,8 +27,8 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [19](#bug-19--the-meter-counts-steps-cloudflare-bills-attempts) | The meter counts steps; Cloudflare bills attempts | 🔴 Guard failure | Fixed, **unverified** |
 | [20](#bug-20--daily_neuron_budget-resets-on-a-utc-day-cloudflares-allocation-does-not) | `DAILY_NEURON_BUDGET` resets on a UTC day; Cloudflare's allocation does not | 🟠 Guard shape | **Open** (mitigated) |
 | [21](#bug-21--embeddings-return-no-neurons-field-so--0-meters-them-as-free) | Embeddings return no `neurons` field, so `?? 0` meters them as free | 🔴 Guard failure | **Fixed & measured** |
-| [22](#bug-22--a-finding-is-attributed-to-a-source-that-returned-no-content) | A finding is attributed to a source that returned no content | 🔴 False attribution | ✅ **Fixed & verified** (`8ca445dd`, runs `63ac5d92` / `797a52f2`) |
-| [23](#bug-23--the-usage-ledger-has-no-model-column-so-the-reconciliation-rule-cannot-be-run) | The usage ledger has no model column, so the reconciliation rule cannot be run | 🟡 Guard observability | ✅ **Fixed & verified** (`764f7709`, per-model delta match) |
+| [22](#bug-22--a-finding-is-attributed-to-a-source-that-returned-no-content) | A finding is attributed to a source that returned no content | 🔴 False attribution | ✅ **Fixed & verified** (`8ca445dd`) — and **confirmed in production** on daily run `5a8c9aeb` against the original incident |
+| [23](#bug-23--the-usage-ledger-has-no-model-column-so-the-reconciliation-rule-cannot-be-run) | The usage ledger has no model column, so the reconciliation rule cannot be run | 🟡 Guard observability | ✅ **Fixed & verified** (`764f7709`) — **confirmed in production**: exact per-model match on run `5a8c9aeb` |
 
 ---
 
@@ -862,7 +862,8 @@ the external comparison found the truth.
 
 ## Bug 22 — A finding is attributed to a source that returned no content
 
-**Severity:** 🟠 Traceability · **Status:** **Open** · found 2026-08-13 reading the first
+**Severity:** 🔴 False attribution · **Status:** **Fixed & verified** (`8ca445dd`),
+**confirmed in production** on daily run `5a8c9aeb` · found 2026-08-13 reading the first
 unattended daily run `4306b012`
 
 **How it showed up.** Iteration 3 claimed `https://innovationaus.com/feed` as its
@@ -951,12 +952,105 @@ not replication unless something between the trials actually changed — a diffe
 connection, a different time of day, a different code path. Before quoting an
 n-of-5, state what varied across the five.
 
+### Fixed & verified 2026-08-13, version `8ca445dd`
+
+**Invariant closed:** *a finding's `source_url` names a source that contributed at
+least one chunk to that iteration.*
+
+Grepping every writer to it found the defect in **six** places across two paths, not
+the one that was reported:
+
+| Path | Site | Was |
+|---|---|---|
+| workflow | `recordFinding` | `ingested.url` unconditionally |
+| workflow | finding vector `sourceUrl` | `ingested.url ?? ''` |
+| workflow | `buildPrompt` "JUST READ" | `ingested.error ? null : ingested.url` |
+| `/step` | `recordFinding` | `source.url` unconditionally |
+| `/step` | finding vector `sourceUrl` | `source.url` |
+| `/step` | `buildPrompt` "JUST READ" | `ingestError ? null : source.url` |
+
+All six now derive from one value per path — `contributedUrl = chunks > 0 ? url :
+null`.
+
+**Keyed on `chunks`, not on `error`.** The reported incident was a 403, so an
+`error`-keyed guard would have passed its repro — and missed a fetch that returns
+200 and yields zero chunks (empty body, nothing left after boilerplate stripping).
+That is the same invariant violated over a different dimension, which is the trap
+#17→#19→#21 fell into three times (CLAUDE.md §9).
+
+**The finding vector mattered as much as the row.** Recalled excerpts carry their
+`sourceUrl` into later iterations' prompts, so a false attribution written to
+Vectorize propagates forward instead of staying in one D1 row.
+
+**The report side was part of the invariant, not extra scope.** Fixing only the
+table would leave the report free to invent an attribution for a null-source
+finding, which is where the damage actually lands. The `SOURCE:` placeholder is now
+`NONE — synthesised from earlier material; do NOT cite a URL for this finding`.
+
+**Verification** — a run seeded with exactly one dead URL
+(`…title=ZZQQ_No_Such_Page_For_Bug22&action=raw`, HTTP 404):
+
+- **`/step` writer** (`63ac5d92`): fetch failed, `chunks=0`, finding row written with
+  `source_url = NULL`. **PASS**
+- **workflow writer** (`797a52f2`, real 1-iteration run): `sources: failed chunks=0`,
+  finding `source_url = null`, and the report **cited no URL** — *"synthesised from
+  earlier material and does not have a URL to cite"*. **PASS**
+
+**What this verification cannot prove.** It exercised only the *fetch-error* route to
+zero chunks. The 200-with-zero-chunks branch is closed by construction — both paths
+read `chunks`, and nothing else writes these fields — but it was **not exercised**,
+because no seed on hand produces it. Nor did it test the retry path: `record:n` can
+re-run, and the upsert overwrites `source_url` with the same derived value, so a
+retry is idempotent by inspection rather than by test.
+
+**Cosmetic, not filed.** In this degenerate run (one source, zero chunks, a
+meta-goal) the report echoed the literal string `SOURCE: NONE` into its prose. Harmless
+where there is nothing to cite; worth a look if it shows up in a real mixed run.
+
+**Incidental confirmation.** A stray `POST /start` during this work hit a genuine
+`workflow create failed: Error: internal error` (`b063f5e2`) and was correctly closed
+as `failed` with 0 iterations — **#8 and #18 holding under a real failure**, not a
+simulated one.
+
+### Confirmed in production 2026-08-13 — daily run `5a8c9aeb`
+
+The verification above used a **manufactured** dead URL (a 404 Wikipedia title) in a
+degenerate one-source run. The unattended 16:00Z daily run then exercised the same fix
+against the **original incident**, unprompted:
+
+`innovationaus.com/feed` 403'd for the third consecutive real run, and:
+
+| n | `source_url` |
+|---|---|
+| 1 | `https://startupdaily.net/feed` |
+| 2 | `https://techcouncil.com.au/feed` |
+| **3** | **`null`** |
+| 4 | `…title=Australia&action=raw` |
+| 5 | `…title=Economy_of_Australia&action=raw` |
+
+**The report contains no citation to `innovationaus.com/feed`.** The $248.5bn figure —
+the exact claim that was falsely attributed to it on `4306b012` and again on
+`9174a7bc` — is now cited to the two Wikipedia sources that actually supplied it. The
+defect closed on the same sentence that exposed it, in the deliverable, with nobody
+watching.
+
+Note also that the `SOURCE: NONE` echo flagged as cosmetic above **did not appear** in
+this real mixed run — it was an artefact of a report with nothing else to write about.
+
+**And the seed's status is now 0/3 in runs.** The escalation note above said the gap
+between run-failures and probe-successes "is now the thing to investigate." It still
+is; three for three is no longer comfortably called intermittent. But the fix means
+that investigation is a **source-quality** question, not a correctness one — a
+zero-chunk fetch can no longer contaminate the report while it stays unresolved. That
+is the difference between an open bug and an open decision.
+
 ---
 
 ## Bug 23 — The `usage` ledger has no model column, so the reconciliation rule cannot be run
 
-**Severity:** 🟡 Guard observability · **Status:** **Open** · found 2026-08-13
-reconciling run `4306b012`
+**Severity:** 🟡 Guard observability · **Status:** **Fixed & verified** (`764f7709`),
+**confirmed in production** on daily run `5a8c9aeb` · found 2026-08-13 reconciling run
+`4306b012`
 
 **How it showed up.** The post-run reconciliation for UTC 2026-08-12:
 
@@ -1037,65 +1131,6 @@ accident of an empty window, which is not a property anything guarantees. The ne
 reconciliation that overlaps a probe, a `/search`, or a second run is back to an
 aggregate and a hypothesis. Add the model column.
 
-### Fixed & verified 2026-08-13, version `8ca445dd`
-
-**Invariant closed:** *a finding's `source_url` names a source that contributed at
-least one chunk to that iteration.*
-
-Grepping every writer to it found the defect in **six** places across two paths, not
-the one that was reported:
-
-| Path | Site | Was |
-|---|---|---|
-| workflow | `recordFinding` | `ingested.url` unconditionally |
-| workflow | finding vector `sourceUrl` | `ingested.url ?? ''` |
-| workflow | `buildPrompt` "JUST READ" | `ingested.error ? null : ingested.url` |
-| `/step` | `recordFinding` | `source.url` unconditionally |
-| `/step` | finding vector `sourceUrl` | `source.url` |
-| `/step` | `buildPrompt` "JUST READ" | `ingestError ? null : source.url` |
-
-All six now derive from one value per path — `contributedUrl = chunks > 0 ? url :
-null`.
-
-**Keyed on `chunks`, not on `error`.** The reported incident was a 403, so an
-`error`-keyed guard would have passed its repro — and missed a fetch that returns
-200 and yields zero chunks (empty body, nothing left after boilerplate stripping).
-That is the same invariant violated over a different dimension, which is the trap
-#17→#19→#21 fell into three times (CLAUDE.md §9).
-
-**The finding vector mattered as much as the row.** Recalled excerpts carry their
-`sourceUrl` into later iterations' prompts, so a false attribution written to
-Vectorize propagates forward instead of staying in one D1 row.
-
-**The report side was part of the invariant, not extra scope.** Fixing only the
-table would leave the report free to invent an attribution for a null-source
-finding, which is where the damage actually lands. The `SOURCE:` placeholder is now
-`NONE — synthesised from earlier material; do NOT cite a URL for this finding`.
-
-**Verification** — a run seeded with exactly one dead URL
-(`…title=ZZQQ_No_Such_Page_For_Bug22&action=raw`, HTTP 404):
-
-- **`/step` writer** (`63ac5d92`): fetch failed, `chunks=0`, finding row written with
-  `source_url = NULL`. **PASS**
-- **workflow writer** (`797a52f2`, real 1-iteration run): `sources: failed chunks=0`,
-  finding `source_url = null`, and the report **cited no URL** — *"synthesised from
-  earlier material and does not have a URL to cite"*. **PASS**
-
-**What this verification cannot prove.** It exercised only the *fetch-error* route to
-zero chunks. The 200-with-zero-chunks branch is closed by construction — both paths
-read `chunks`, and nothing else writes these fields — but it was **not exercised**,
-because no seed on hand produces it. Nor did it test the retry path: `record:n` can
-re-run, and the upsert overwrites `source_url` with the same derived value, so a
-retry is idempotent by inspection rather than by test.
-
-**Cosmetic, not filed.** In this degenerate run (one source, zero chunks, a
-meta-goal) the report echoed the literal string `SOURCE: NONE` into its prose. Harmless
-where there is nothing to cite; worth a look if it shows up in a real mixed run.
-
-**Incidental confirmation.** A stray `POST /start` during this work hit a genuine
-`workflow create failed: Error: internal error` (`b063f5e2`) and was correctly closed
-as `failed` with 0 iterations — **#8 and #18 holding under a real failure**, not a
-simulated one.
 
 ### Fixed & verified 2026-08-13, version `764f7709`
 
@@ -1161,3 +1196,30 @@ it, and those want separate verification. The table is now easier to extend that
 **What this does not prove.** Only two models were exercised, both already known to
 `priceCall`. A model with no entry in the rate table still routes to the loud
 `console.error` path from #21; that branch remains untested here.
+
+### Confirmed in production 2026-08-13 — daily run `5a8c9aeb`
+
+The verification above was a hand-built `/step` exercise. The unattended daily run is
+the first reconciliation of a **real** 5-iteration workload done the way rule 3 always
+said it should be — per model, as a query rather than an inference:
+
+| model | Cloudflare | ours | diff | calls |
+|---|---|---|---|---|
+| `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 994.9426 | 994.9426 | **0.0000** | 7/7 |
+| `@cf/baai/bge-small-en-v1.5` | 160.8152 | 160.8298 | +0.0146 | 17/17 |
+
+Exact on reasoning; +0.0091% on embeddings, which is the published-rate rounding #21
+measured (0.009%) — **the same signature now reproduced at four scales**: one call,
+three calls, 14 calls, 17 calls. A constant proportional bias is the signature of a
+rate constant, not of a missed call site; a coverage gap would scale with call count,
+not with neurons.
+
+**7 reasoning calls is 5 iterations + 1 report + 1 out-of-band `/step`** — the count
+reconciles to a specific, nameable set of calls rather than to a plausible total.
+That is what the model column bought: before it, this run would have produced a single
+aggregate delta and the same hypothesis-shaped answer as 2026-08-12.
+
+**What it still cannot prove** is unchanged and worth restating, because a clean PASS
+invites the opposite conclusion: this run had **no retries**, so #19's retry
+accounting remains untested (see #19). Every reconciliation so far has been of a run
+where nothing failed after an AI call returned.
