@@ -860,6 +860,37 @@ the external comparison found the truth.
 
 ---
 
+### Qualified 2026-08-14 — it is per *model*, not per model class
+
+This bug's title over-generalises, and the correction belongs next to it. Probing
+every embedding model on the free tier, one call each:
+
+| model | dims | `usage` returned |
+|---|---|---|
+| `@cf/baai/bge-small-en-v1.5` (ours) | 384 | tokens, **no `neurons`** |
+| `@cf/baai/bge-m3` | 1024 | **`null` — no usage object at all** |
+| `@cf/qwen/qwen3-embedding-0.6b` | 1024 | tokens **and `neurons`** |
+
+So *some* embedding models do return the field. More useful for the guard: **`bge-m3`
+is strictly worse than the model this bug was about.** With no usage object at all it
+can be priced from neither `neurons` nor `total_tokens`, so adopting it would meter as
+0 regardless of what the rate table says. It is 42% cheaper than ours (1,075 vs 1,841
+neurons/M) and a stronger retrieval model, and it is unusable here for exactly the
+reason §10 exists.
+
+`@cf/qwen/qwen3-embedding-0.6b` is the same price as `bge-m3` and **does** return
+`neurons`, which would let `priceCall` drop its embedding rate table entirely and make
+this bug's whole class impossible rather than merely fixed. Blocked on dimension: 1024
+against a 384-dim Vectorize index, which is fixed at creation. See `HANDOFF.md`
+→ *Start here*, item 2.
+
+**The meta-point.** #21's fix was written from one model's behaviour, and the
+*correction* to it was then generalised to "embeddings do not return `neurons`" — one
+level down, the same error. Print the raw response of **each** model you call.
+
+
+---
+
 ## Bug 22 — A finding is attributed to a source that returned no content
 
 **Severity:** 🔴 False attribution · **Status:** **Fixed & verified** (`8ca445dd`),
