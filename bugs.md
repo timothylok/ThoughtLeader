@@ -27,8 +27,8 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [19](#bug-19--the-meter-counts-steps-cloudflare-bills-attempts) | The meter counts steps; Cloudflare bills attempts | 🔴 Guard failure | Fixed, **unverified** |
 | [20](#bug-20--daily_neuron_budget-resets-on-a-utc-day-cloudflares-allocation-does-not) | `DAILY_NEURON_BUDGET` resets on a UTC day; Cloudflare's allocation does not | 🟠 Guard shape | **Open** (mitigated) |
 | [21](#bug-21--embeddings-return-no-neurons-field-so--0-meters-them-as-free) | Embeddings return no `neurons` field, so `?? 0` meters them as free | 🔴 Guard failure | **Fixed & measured** |
-| [22](#bug-22--a-finding-is-attributed-to-a-source-that-returned-no-content) | A finding is attributed to a source that returned no content | 🟠 Traceability | **Open** |
-| [23](#bug-23--the-usage-ledger-has-no-model-column-so-the-reconciliation-rule-cannot-be-run) | The usage ledger has no model column, so the reconciliation rule cannot be run | 🟡 Guard observability | **Open** |
+| [22](#bug-22--a-finding-is-attributed-to-a-source-that-returned-no-content) | A finding is attributed to a source that returned no content | 🔴 False attribution | **Open — reproduced 2/2, reaches the report** |
+| [23](#bug-23--the-usage-ledger-has-no-model-column-so-the-reconciliation-rule-cannot-be-run) | The usage ledger has no model column, so the reconciliation rule cannot be run | 🟡 Guard observability | **Open** — ambiguity it caused is now resolved (clean run `9174a7bc`) |
 
 ---
 
@@ -916,6 +916,41 @@ rather than extrapolate from one sample* — applies to failures exactly as it d
 timings, and a failure is the easier one to over-read, because it arrives with an
 explanation attached.
 
+### Escalated 2026-08-13 — reproduced on run `9174a7bc`, and it reaches the report
+
+Severity raised from 🟠 Traceability to 🔴 **False attribution**. The same seed 403'd
+again with 0 chunks, at the same position, and finding #3 was again stamped with its
+URL. This run shows the consequence arriving in the deliverable:
+
+> The Australian technology sector contributes $248.5 billion (8.9% of GDP)…
+> **(https://innovationaus.com/feed)**
+
+That is in the **final report**, citing a source that returned nothing on that run.
+It is not bug #12 (the URL is real and was genuinely queued) and not bug #13 (the
+citation is a URL, not an iteration number). It is a third failure mode on the same
+surface: **a real URL, correctly formatted, attributed to content it did not
+supply.** For a research loop the report is the product, so this is now a defect in
+the output, not in bookkeeping.
+
+Counted properly the failure is **not intermittent in the place that matters**:
+0 of 2 in real runs, at iteration 3 both times.
+
+### The probe method was wrong too — corrected again
+
+The "transient, not blocked" finding above rested on five probes returning 200. Those
+were **five consecutive requests in a single burst** — one connection, one colo,
+seconds apart — which is close to *one* independent sample, not five. Re-stated
+honestly: the source **fails in runs (0/2) and succeeds in probe bursts (5/5)**.
+Neither "bot-blocked" nor "transient" is established, and the difference between the
+two contexts is now the thing to investigate — not the source's status.
+
+**Lesson, third pass on the same seed.** The first reading over-read one failure as a
+property. The correction over-read one burst as five samples. Both errors have the
+same shape: *treating correlated observations as independent evidence.* Repetition is
+not replication unless something between the trials actually changed — a different
+connection, a different time of day, a different code path. Before quoting an
+n-of-5, state what varied across the five.
+
 ---
 
 ## Bug 23 — The `usage` ledger has no model column, so the reconciliation rule cannot be run
@@ -970,3 +1005,34 @@ depends on was never built, so the second time the rule was applied it could onl
 produce an aggregate number and a hypothesis. **A verification habit needs the
 instrumentation that makes it decisive, or it degrades into a number you have to
 argue about.** The direction of the error is still the one that matters: low.
+
+### Resolved by circumstance 2026-08-13 — clean run `9174a7bc`
+
+Run `9174a7bc` had the account entirely to itself (04:47–06:00Z, no REST probes, no
+refusals), which is the clean-room case the 2026-08-12 reconciliation lacked:
+
+| | Neurons | Calls |
+|---|---|---|
+| Ours | 990.3514279829101 | 20 |
+| Cloudflare — llama-3.3-70b | 840.8383 | 6 |
+| Cloudflare — bge-small-en-v1.5 | 149.4996 | 14 |
+| **Cloudflare total** | **990.3379** | **20** |
+| **Delta** | **+0.0135 (+0.0014%, HIGH)** | **0** |
+
+**Call counts match exactly**, and 6 reasoning calls is precisely 5 iterations + 1
+report — `meterCall()` coverage under load is confirmed.
+
+**The residual is accounted for to the neuron.** #21 measured the published rate
+1,841 against Cloudflare's effective 1,840.83, a 0.009% overstatement. Applied to
+149.4996 embedding neurons that predicts **0.0138**; observed **0.0135**.
+
+**This settles the −2.6031 from 2026-08-12** in favour of explanation 1. A low
+embedding rate is **disproven** — the rate is fractionally *high*, and a 1.7%
+shortfall would have shown up here as ≈2.5 neurons low rather than 0.0135 high. The
+earlier gap was the out-of-band REST probes from the #21 investigation, which spend
+on the account and never touch our ledger.
+
+**The bug stays open.** Nothing was fixed — the ambiguity was resolved by the
+accident of an empty window, which is not a property anything guarantees. The next
+reconciliation that overlaps a probe, a `/search`, or a second run is back to an
+aggregate and a hypothesis. Add the model column.
