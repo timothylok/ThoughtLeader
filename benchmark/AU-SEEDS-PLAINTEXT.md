@@ -144,3 +144,74 @@ If the first free-tier run returns it `Unanswered`, delete it the same way.
   outer spend stop. That is the one advantage this option has over Paid, and it is
   why `DAILY_NEURON_BUDGET` must terminate the run *before* the platform does — see
   the analytics-vs-enforcement gap recorded in `HANDOFF.md`.
+
+---
+
+## §6 — Addendum 2026-08-17: what a seed's *visible window* is, and why it changed the sourcing rule
+
+Written after four unattended daily runs and bugs.md #24. **The sourcing rule in §5 was
+incomplete in a way that mattered, and a later claim built on it was simply wrong.**
+
+### The rule that was wrong
+
+Session 4 concluded, from three runs where goal verdicts improved, that *"the seeds that
+pay are the ones that change"* — prefer live feeds over static reference pages. Both
+halves of that need correcting:
+
+- Goal 1 fell from **Answered** back to **Unanswered** on 2026-08-14 and stayed there for
+  three runs, while `startupdaily.net/feed` was **frozen** (nothing published 08-14
+  06:50Z → 08-17 ~01:00Z). The feed did not take the facts away.
+- The feed still *contained* Farmbot ($22m), CUREator+ ($13.5m) and Alloy Robotics
+  ($11.5m) throughout. The loop had stopped reading them.
+
+The loop showed the model only the first 6 chunks — characters 0–7,600 of 13,162 — and
+**RSS is newest-first**, so that is an eviction window. Four posts arriving in 24 hours
+(two of them off-topic: e-bike laws, Pixel phones) pushed the goal-1 evidence past the
+cut. Churn against a fixed window is a **liability**, not an engine.
+
+### The rule that replaces it
+
+**A seed's value is what is in its visible window, not what is in the document.** When
+adding a seed, ask three things, in this order:
+
+1. **Does it extract?** (§3's probe — `content-type`, `?action=raw`.)
+2. **Is it about what you think?** (bug #16 — a 46-character `#REDIRECT` stub still
+   reports as a successful fetch. Re-probed 2026-08-17: `Science_and_technology_in_Australia`
+   is still exactly that.)
+3. **Does the answer live inside the first `FRESH_CHARS` characters, and will it still be
+   there next week?** This is the new one. A 44-chunk feed shows the model ~25% of itself;
+   a 15-chunk feed shows ~55%; an 11-chunk feed shows all of it. **Prefer the smallest
+   on-topic source over the largest**, which is the opposite of the instinct.
+
+`FRESH_CHARS = 16_000` (from 2026-08-17) is "all of Startup Daily today" and is
+**provisional** — it stops being that as the feed grows.
+
+### Probed 2026-08-17, all through the Worker
+
+| candidate | verdict |
+|---|---|
+| `smartcompany.com.au/feed` | ✅ real RSS, 18,718 ch / 15 chunks — best untested candidate |
+| `techboard.com.au/feed` | ⚠️ real RSS, 53,517 ch / 44 chunks. **On-topic but not answer-bearing** — an iteration returns *"Techboard has published … artificial intelligence funding data reviews from FY18 to FY25, but the provided material does not specify the main sectors"*. The data is behind the article links |
+| `australianfintech.com.au/feed` | ⚠️ 42,843 ch / 35 chunks — fintech only, poor window ratio |
+| `stockhead.com.au/feed` | ❌ 1.27 MB, truncated at 60,000 |
+| `startupdaily.net/category/funding/feed` | ❌ returns **`text/html`** — an 80 KB category page that fetches perfectly and reads as success. #15 + #16 in one URL |
+| `cutthrough.vc/feed` (530) · `businessnewsaustralia.com/rss.xml`, `itnews.com.au/rss/all.xml`, `cyberdaily.au/feed`, `csiro.au/…?feed=rss`, `Artificial_intelligence_industry_in_Australia` (404) | ❌ |
+
+**Probe through the Worker, never locally.** `techboard.com.au/feed` serves a Cloudflare
+challenge page to a local `curl` and clean RSS to the Worker — the exact inverse of
+`innovationaus.com/feed` (0/6 in runs, 6/6 in probes). Either direction of disagreement
+will mislead you, and a local probe would have wrongly rejected a good source here.
+
+### The standing conclusion for goal 1
+
+**No plain-text AU source found so far carries sector-concentration data.** Goal 2
+(notable rounds, active investors) is exactly what a news feed answers, and it has held
+at `Partial` for four runs. Goal 1 wants a dataset, and §5's accepted consequence —
+`MAX_SOURCE_DEPTH` effectively 0, no `<a href>` in RSS — means the loop cannot follow a
+link to reach one. `a[href]` harvesting runs through HTMLRewriter and never executes on
+XML, so this is structural, not a config gap.
+
+Three options, none of them a code fix: **(a)** reframe goal 1 to what feeds can answer,
+**(b)** hand-seed specific Techboard review URLs when they publish, **(c)** revisit
+one-hop link-following for RSS `<link>` elements. Per §5's own rule, this is a brief
+decision settled by running it, not by reasoning about it.
