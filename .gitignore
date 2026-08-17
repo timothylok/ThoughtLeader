@@ -14,3 +14,6 @@ HANDOFF.md
 AI_Research.md
 benchmark/BENCHMARK.md
 liverun.html
+
+# Session scratch: run dumps, probe output, the bug 24 test harness
+.runs/

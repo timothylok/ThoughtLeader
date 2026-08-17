@@ -14,7 +14,7 @@
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { num, type AiUsage, type Env, type RunParams, type Reasoning, type TerminationReason, type IngestResult } from './types.ts';
-import { fetchSource, chunk, selectNextSources } from './ingest.ts';
+import { fetchSource, chunk, freshExcerpts, selectNextSources } from './ingest.ts';
 import { recall, remember, chunkKey, findingKey, type Recalled } from './memory.ts';
 import { buildPrompt, parseReasoning, recallQuery, REPORT_SYSTEM } from './prompt.ts';
 import { alert } from './notify.ts';
@@ -47,8 +47,16 @@ function isTransient(e: unknown): boolean {
 
 const PRIOR_FINDINGS_IN_PROMPT = 6;
 
-/** Chunks from the current source carried into the prompt. ~6 × 1.4KB. */
-const FRESH_EXCERPTS = 6;
+/**
+ * Characters of the current source carried into the prompt. See
+ * `freshExcerpts()` in ingest.ts for why this is a character budget and not a
+ * chunk count, and for the measurement behind the number.
+ *
+ * 16,000 shows Startup Daily (14,762) whole and bounds a 60,000-char Wikipedia
+ * article at ~11 chunks. Configurable so the window can be measured rather than
+ * assumed (CLAUDE.md §6).
+ */
+export const FRESH_CHARS_DEFAULT = 16_000;
 
 /** Ceiling on model-proposed sources per run, on top of the per-iteration cap. */
 const MAX_ADDED_SOURCES_PER_RUN = 10;
@@ -62,6 +70,7 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
     const topK = num(env.RECALL_TOP_K, 8);
     const maxBytes = num(env.MAX_FETCH_BYTES, 262_144);
     const maxDepth = num(env.MAX_SOURCE_DEPTH, 2);
+    const freshChars = num(env.FRESH_CHARS, FRESH_CHARS_DEFAULT);
     const budget = num(env.DAILY_NEURON_BUDGET, 10_000);
 
     const genEnd = Math.min(maxIterations, startAt + perGen);
@@ -137,7 +146,7 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
               bytes: doc.bytes,
               truncated: doc.truncated,
               error: null,
-              excerpts: pieces.slice(0, FRESH_EXCERPTS),
+              excerpts: freshExcerpts(pieces, freshChars),
               links: doc.links,
             };
           },

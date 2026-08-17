@@ -12,6 +12,8 @@ export interface Env {
   MAX_FETCH_BYTES: string;
   RECALL_TOP_K: string;
   MAX_SOURCE_DEPTH: string;
+  /** Characters of the current source carried into the prompt. */
+  FRESH_CHARS: string;
   /** Hard stop on neurons spent per UTC day, across all runs. 0 = unlimited. */
   DAILY_NEURON_BUDGET: string;
 

@@ -182,6 +182,33 @@ function normalize(s: string): string {
 }
 
 /**
+ * The prefix of a source carried into the prompt, bounded by CHARACTERS rather
+ * than by a chunk count.
+ *
+ * A count was the wrong unit. On an RSS feed — newest-first — "first 6 chunks"
+ * is a newest-N window that shrinks as the feed grows, so a source small enough
+ * to show in full was still being cut: Startup Daily is 14,762 chars across 11
+ * chunks and the loop read 8,400 of them. Four posts arriving on 2026-08-14
+ * pushed the agtech/biotech evidence past the cut and goal 1 went Answered ->
+ * Unanswered while those facts sat in the feed and in Vectorize, measured at
+ * 0/8 against 3/3 once the whole feed was shown.
+ *
+ * A budget says the useful thing instead: show the source WHOLE when it fits,
+ * and bound the prompt when it does not. Always returns at least one chunk —
+ * a source larger than the budget must still contribute something.
+ */
+export function freshExcerpts(pieces: string[], budget: number): string[] {
+  const out: string[] = [];
+  let total = 0;
+  for (const piece of pieces) {
+    if (out.length > 0 && total + piece.length > budget) break;
+    out.push(piece);
+    total += piece.length;
+  }
+  return out;
+}
+
+/**
  * Fixed-length slicing with overlap. Deliberately dumb: no sentence detection,
  * no lookaround regex. Overlap keeps facts from being split across a boundary.
  */

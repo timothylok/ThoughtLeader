@@ -1,7 +1,7 @@
 // @ts-expect-error - bundled as text via the Text rule in wrangler.jsonc
 import LIVE_HTML from '../liverun.html';
 import { num, type AiUsage, type Env, type StartRequest } from './types.ts';
-import { fetchSource, chunk, selectNextSources, normalizeUrl } from './ingest.ts';
+import { fetchSource, chunk, freshExcerpts, selectNextSources, normalizeUrl } from './ingest.ts';
 import { recall, remember, chunkKey, findingKey } from './memory.ts';
 import { buildPrompt, parseReasoning, recallQuery } from './prompt.ts';
 import { alert } from './notify.ts';
@@ -30,6 +30,7 @@ import {
 } from './db.ts';
 
 export { ResearchLoop } from './workflow.ts';
+import { FRESH_CHARS_DEFAULT } from './workflow.ts';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data, null, 2), {
@@ -439,7 +440,12 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
   try {
     const doc = await fetchSource(source.url, num(env.MAX_FETCH_BYTES, 262_144));
     const pieces = chunk(doc.text);
-    fresh = pieces.slice(0, 6);
+    // Same window as the workflow, from the same setting and the same function.
+    // This was a bare `pieces.slice(0, 6)` duplicating workflow.ts's constant, so
+    // /step — the tool used to debug the loop — would have kept reading 6 chunks
+    // after the loop moved off it, and the divergence would be invisible
+    // (CLAUDE.md §9).
+    fresh = freshExcerpts(pieces, num(env.FRESH_CHARS, FRESH_CHARS_DEFAULT));
     observedLinks = doc.links;
     const stored = await remember(
       env,
@@ -509,6 +515,12 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
     source: source.url,
     ingestError,
     chunksStored: chunks,
+    // Report the window that was actually applied, not the one requested. A
+    // config knob verified only by the value you passed in is a guard checked
+    // against itself (CLAUDE.md §10).
+    freshCharBudget: num(env.FRESH_CHARS, FRESH_CHARS_DEFAULT),
+    freshChunksUsed: fresh.length,
+    freshCharsUsed: fresh.reduce((a, t) => a + t.length, 0),
     recalled: recalled.items.length,
     reasoning,
     enqueued,
