@@ -253,6 +253,40 @@ an event, ask how many *independent* observations support it.
 
 ---
 
+## 12. Verify The Manipulation Before You Believe The Result
+
+**An experiment that cannot have applied its own treatment will still produce a
+clean-looking table.**
+
+Measuring the fresh-excerpt window here (bugs.md #24) produced eight tidy samples
+across two "arms" that were the *same arm*. Three config channels (`--var`,
+`.dev.vars`, `.env`) silently failed to bind, and a fourth bound while a stale
+server on the same port kept answering — wrangler printed
+`env.FRESH_EXCERPTS ("11")` the whole time. Control n=8, treatment n=0, and every
+number was self-consistent.
+
+- **Report the effective setting from inside the code path, next to the result.**
+  Not from the launcher, not from the startup banner, not from the value you
+  passed in. §10's rule about guards checked against their own computation is the
+  same rule: the launcher and the handler are two different witnesses.
+- **An identical cost or latency figure across arms is a failed manipulation until
+  proven otherwise.** Two runs billing `140.83984375` neurons did not process
+  different prompts. This was the first and cheapest tell, and it arrived long
+  before the diagnosis.
+- **Count distinct PIDs on the port, not sockets.** Killing a dev-server parent can
+  leave the child holding the socket, so the "restart" you just did is still
+  serving the old configuration. One wrangler instance opens several sockets, so
+  socket count proves nothing.
+- **State the arm sizes when reporting.** "n=8 vs n=3" makes an n=0 arm impossible
+  to hide behind a percentage. This is §11 pointed at your own instrumentation
+  rather than at the world.
+
+The test: name the observation that would look different if the treatment had
+never been applied. If every number in your table survives that question
+unchanged, you have not run an experiment.
+
+---
+
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites
 due to overcomplication, clarifying questions come before implementation rather than
 after mistakes, the risks named during planning get measured rather than assumed, and

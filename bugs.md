@@ -29,6 +29,9 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [21](#bug-21--embeddings-return-no-neurons-field-so--0-meters-them-as-free) | Embeddings return no `neurons` field, so `?? 0` meters them as free | 🔴 Guard failure | **Fixed & measured** |
 | [22](#bug-22--a-finding-is-attributed-to-a-source-that-returned-no-content) | A finding is attributed to a source that returned no content | 🔴 False attribution | ✅ **Fixed & verified** (`8ca445dd`) — and **confirmed in production** on daily run `5a8c9aeb` against the original incident |
 | [23](#bug-23--the-usage-ledger-has-no-model-column-so-the-reconciliation-rule-cannot-be-run) | The usage ledger has no model column, so the reconciliation rule cannot be run | 🟡 Guard observability | ✅ **Fixed & verified** (`764f7709`) — **confirmed in production**: exact per-model match on run `5a8c9aeb` |
+| [24](#bug-24--the-fresh-excerpt-window-is-a-newest-n-cut-and-it-destroyed-a-verdict) | The fresh-excerpt window is a newest-N cut, and it destroyed a verdict | 🔴 Silent research regression | **Fixed & measured** (0/8 → 3/3), uncommitted |
+| [25](#bug-25--a-finding-is-attributed-to-a-source-that-supplied-none-of-its-content) | A finding is attributed to a source that supplied none of its content | 🔴 False attribution | **Open** — #22's invariant one branch away |
+| [26](#bug-26--eight-samples-of-a-config-experiment-that-tested-nothing) | Eight samples of a config experiment that tested nothing | 🟠 Test validity | Diagnosed; practice added |
 
 ---
 
@@ -1254,3 +1257,170 @@ aggregate delta and the same hypothesis-shaped answer as 2026-08-12.
 invites the opposite conclusion: this run had **no retries**, so #19's retry
 accounting remains untested (see #19). Every reconciliation so far has been of a run
 where nothing failed after an AI call returned.
+
+---
+
+## Bug 24 — The fresh-excerpt window is a newest-N cut, and it destroyed a verdict
+
+**Severity:** 🔴 Silent research regression · **Status:** **Fixed & measured** (uncommitted)
+
+**How it showed up.** Goal 1 read **Answered** on daily run `5a8c9aeb` (2026-08-13) and
+**Unanswered** on the next three — `b099c83d`, `dc0a0b39`, `8772de4e` — with all three
+of its supporting specifics gone from the reports:
+
+| `5a8c9aeb` | `b099c83d` and after |
+|---|---|
+| Farmbot **$22m Series B** (agtech) | Bailador / PropHero |
+| CUREator+ **6 startups / $13.5m** (biotech) | Stirling **NZ$3.8m** (Blackbird) |
+| Alloy Robotics **$11.5m Seed** | Kantoko **$3.5m** seed |
+
+The obvious reading — the live feed moved on and took the facts with it — is **wrong**.
+`startupdaily.net/feed` fetched at 2026-08-17 00:50Z had a newest item dated **Fri 14
+Aug 06:50Z**, ten hours *before* the 08-14 run, and had published nothing since. All
+three losing runs read byte-identical material, which is why their iteration-1 findings
+are verbatim identical. **And that frozen feed still contained Farmbot, CUREator+ and
+Alloy Robotics.** The loop stopped reporting facts that were still in front of it.
+
+**Root cause.** `workflow.ts` passed `pieces.slice(0, FRESH_EXCERPTS)` with
+`FRESH_EXCERPTS = 6`. At `chunk(size=1400, overlap=160)` that is characters 0–7,600 of
+13,162 — and **RSS is newest-first**, so it is a newest-N window, not a summary of the
+source. Mapping every item to its offset in the frozen feed:
+
+```
+IN  @ 1214  Bailador / PropHero                     <- cited 08-14/15/16
+IN  @ 2301  NSW e-bike laws
+IN  @ 3463  Kiwi AI startup banks $3.15m (Stirling) <- cited 08-14/15/16
+IN  @ 4707  Google Pixel cameras
+IN  @ 5784  Zac Altman ADHD $3.5m (Kantoko)         <- cited 08-14/15/16
+IN  @ 7229  Farmbot $22m Series B          (cut at 7600 - title only)
+--------------- first-6-chunk boundary ---------------
+OUT @ 8273  CUREator+ 6 startups $13.5m             <- cited 08-13
+OUT @ 9351  Why founders have a problem taking action
+OUT @10869  Elon Musk v eSafety
+OUT @12124  Big 3 VCs / robot testing $11.5m (Alloy)<- cited 08-13
+```
+
+Four items published between the two runs (Bailador, e-bikes, Stirling, Pixel) pushed
+the goal-1 evidence over the cut. On 08-13 those four did not exist, so the window began
+at Kantoko and all three cited items were inside it. The evidence was embedded in
+Vectorize the whole time; recall never retrieved it, competing against 200+ chunks from
+the other four seeds.
+
+**The mechanism is window competition, not fact arrival.** A feed refreshing does not add
+evidence, it *evicts* evidence — and an off-topic post (e-bikes, Pixel phones) evicts
+exactly as effectively as a relevant one.
+
+**Measured, both arms verified at the runtime rather than from the value passed in.**
+One `/step` iteration per sample against the frozen feed, single seed, no prior findings:
+
+| specific (offset) | window = 6 chunks, n=8 | window = 11 chunks, n=3 |
+|---|---|---|
+| Bailador / Stirling / Kantoko (@1.2k–5.8k) | 8/8 | 3/3 |
+| Farmbot $22m (@7,229, straddles the cut) | 3/8 | **3/3** |
+| **CUREator+ $13.5m (@8,273, outside)** | **0/8** | **3/3** |
+| **Alloy Robotics $11.5m (@12,124, outside)** | **0/8** | **2/3** |
+
+Sample B2 reconstructed the sector framing unprompted — *"Other **sectors** mentioned
+include **agtech**, with Farmbot raising $22 million Series B, and **biotech**, with six
+Aussie biotechs receiving $13.5m in CUREator+ grants"* — from the identical feed that had
+returned Unanswered three runs running.
+
+**Fix — a character budget, not a chunk count.** `freshExcerpts(pieces, budget)` in
+`ingest.ts`, `FRESH_CHARS_DEFAULT = 16_000`, used by **both** the workflow and `/step`.
+A count was the wrong unit: it cut a source small enough to show whole, and its meaning
+drifts as the source grows. A budget says the useful thing — show the source whole when
+it fits, bound the prompt when it does not — and always returns at least one chunk.
+
+**Verified after the fix.** Startup Daily: `budget=16000 chunksUsed=11 charsUsed=14820`,
+the whole feed, agtech + biotech recovered 2/2. `Australia` wikitext (49 chunks) bounded
+at `chunksUsed=11 charsUsed=15400`.
+
+**Cost.** Reasoning neurons per iteration ~142 mean (8,400 chars) → ~193 mean (~15,400
+chars), **+36%**. Estimated whole-run effect ~1,054 → ~1,325 neurons, well under the
+8,000 budget. The report call is unaffected — it reads findings, not chunks.
+
+**What this does not prove.** The measurement is of iteration 1's **finding**, not of the
+report's **verdict**; the finding → Answered step was not run. One source, one feed
+state, one hour — three independent generations at `temperature: 0.4`, so the honest
+claim is *"the window recovers this feed's goal-1 evidence"*, not *"the window improves
+runs"*. And **16,000 is feed-specific**: it is "all of Startup Daily today" and will
+stop being that as the feed grows.
+
+---
+
+## Bug 25 — A finding is attributed to a source that supplied none of its content
+
+**Severity:** 🔴 False attribution · **Status:** **Open**
+
+**How it showed up.** `dc0a0b39`'s report (2026-08-15):
+
+> Notable funding rounds include Stirling's NZ$3.8 million
+> (**startupdaily.net/feed**, **techcouncil.com.au/feed**,
+> **en.wikipedia.org/…title=Australia**)…
+
+Stirling came from Startup Daily, in iteration 1 of that same run. Two of the three
+citations are false. `8772de4e` does the same for Alloy Robotics, citing it to the Tech
+Council feed alone.
+
+**Corroborated on the flagship number.** A single-source `/step` against the `Australia`
+wikitext, with `recalled: 0`, returns *"Not stated in the sources read so far … the
+provided source is about general information on Australia … but does not mention AI
+startups."* So the **$248.5 billion / 8.9% of GDP** figure that every production report
+cites to that URL is not in the read window either — it is a Tech Council figure that
+reached the finding through recall.
+
+**Root cause — #22's invariant, one branch away (CLAUDE.md §9).** `recall()` injects
+other sources' chunks into the iteration prompt; the model restates them; the finding is
+stamped with *this* iteration's `contributedUrl`; `REPORT_SYSTEM` faithfully copies that
+SOURCE line into the citation. #22 was implemented as **"the source row had `chunks > 0`"**
+(`workflow.ts:165`) when the invariant it named was **"a finding is attributed only to a
+source that contributed the content."** A *successful* fetch credited with another
+source's facts satisfies the code and violates the invariant.
+
+**Why this is worse than #22.** #22 mis-cited a source that fetched nothing, which is a
+narrow and detectable case. This mis-cites sources that fetched perfectly, on claims that
+are individually true, so nothing in the run looks wrong. It is the same defect class as
+#13 → #22: a citation that is real, and to a source that never said it.
+
+**Not fixed.** Candidates, in rough order of cost: carry each recalled chunk's
+`sourceUrl` into the prompt as an attributable citation (the data is already in
+`Recalled.sourceUrl` and already rendered in the `[mem n]` block); or restrict the
+report's citable set to the source that produced each finding; or require per-claim
+attribution in the finding schema. The first is closest to the existing grain.
+
+---
+
+## Bug 26 — Eight samples of a config experiment that tested nothing
+
+**Severity:** 🟠 Test validity · **Status:** Diagnosed; practice added
+
+**How it showed up.** While measuring #24, three "arm B" samples came back with
+`neurons: 140.83984375` — **byte-identical to an arm A sample**. Identical token counts
+mean identical prompts, which meant the window override was not applied. It was not:
+
+- `wrangler dev --remote --var FRESH_EXCERPTS:11` — not applied
+- `.dev.vars` — not applied
+- `.env` (loaded, and shown by wrangler as `Using secrets defined in .env`) — not applied
+- `wrangler.jsonc` `vars` — **applied**, and the startup banner printed
+  `env.FRESH_EXCERPTS ("11")` … while the handler still read `6`
+
+The banner is not evidence the running code sees the value. The real cause of the last
+one: `TaskStop` killed the wrangler **parent** processes, their `workerd` children
+survived holding `127.0.0.1:8787`, and every request was answered by the **first** server
+— the `FRESH_EXCERPTS=6` one — while three later servers sat behind it. `netstat -ano`
+showed **five distinct PIDs** on the port. A single wrangler instance opens ~5 sockets, so
+socket count alone is not the tell; **distinct PIDs** is.
+
+**Net effect:** the control arm had n=8 and the treatment arm n=0, and every sample looked
+clean, self-consistent and publishable. Re-run on a fresh port (`--port 8788`, one PID),
+the treatment arm separated immediately.
+
+**Practice, now applied.** `/step` reports `freshCharBudget`, `freshChunksUsed` and
+`freshCharsUsed` — the setting **actually applied**, from inside the handler, next to the
+result it produced. This is CLAUDE.md §10 in a new costume: a knob verified only against
+the value you passed in always passes. Before trusting a config experiment:
+
+1. Print the effective setting from inside the request, not from the launcher.
+2. `netstat -ano | grep <port>` and count **distinct PIDs**.
+3. Treat an identical cost/latency figure across arms as a failed manipulation until
+   proven otherwise — it was the first and cheapest tell here.

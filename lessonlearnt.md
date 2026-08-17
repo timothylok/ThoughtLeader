@@ -599,3 +599,80 @@ catch.
 - Kept treating the refreshed RSS feed as a confound to be apologised for across three
   runs, when three-for-three it was the finding: on this source profile, **the seeds
   that pay are the ones that change**.
+
+---
+
+## 11. Addendum — session 5, 2026-08-17
+
+Read four unattended daily runs before touching anything, which is the habit that keeps
+paying. The headline is that **the previous session's central claim was wrong, and wrong
+in a way three consecutive runs could not have exposed.**
+
+### "The live feed is the mechanism" was one level too coarse
+
+Session 4 wrote into three documents that the daily improvement tracked
+`startupdaily.net/feed` refreshing overnight — three for three, "stop treating it as
+noise." Then goal 1 went **Answered → Unanswered** and stayed there for three runs.
+
+The feed had not changed. Its newest item was dated 2026-08-14 06:50Z and it published
+nothing for the next three days, so `b099c83d`, `dc0a0b39` and `8772de4e` read
+byte-identical material — and that material still contained Farmbot, CUREator+ and Alloy
+Robotics, the three specifics whose disappearance looked like the feed moving on.
+
+What actually moved was a six-chunk prefix (bugs.md #24). RSS is newest-first, so
+`pieces.slice(0, 6)` is a newest-N window; four posts arriving in 24 hours pushed the
+agtech/biotech evidence past character 7,600 of 13,162. **A feed refreshing does not add
+evidence, it evicts evidence** — and an e-bike story evicts as effectively as a funding
+round.
+
+The correlation was real. The causal story attached to it was backwards in the way that
+matters: it credited *arrival* when the operative event was *eviction*, and it turned a
+liability into a recommendation. "The seeds that pay are the ones that change" is false
+as written; what pays is a seed whose *visible window* is on-topic, and high churn makes
+that worse, not better.
+
+### Three runs of agreement were one observation
+
+This is §11 (repetition is not replication) landing on a claim I had already been careful
+about. The three improving runs were not three trials of "does refresh cause movement" —
+the feed refreshed in all three, so nothing varied. The frozen feed supplied the missing
+cell of the table for free: same sources, three days, verdicts identical and findings
+verbatim identical. Internal variance at `temperature: 0.4` is near zero; the pipeline is
+effectively a deterministic function of its visible window. That single control cell said
+more than the three positive runs combined, and it existed only because nobody posted for
+three days.
+
+### What the reconciliation taught, again
+
+UTC 2026-08-14 reconciled per model to **0.000000000** on reasoning and +0.00905% on
+embeddings, 20/20 calls. The predicted "small unexplained excess on Cloudflare's side"
+from three out-of-band probes was **not there** — the probes had landed on UTC 08-13,
+because they were made on the morning of the 14th *NZST*. Two lessons, both cheap:
+
+- A hand-recorded date is a local-time claim until proven otherwise, and this project
+  meters, budgets and reconciles in UTC.
+- `bge-m3` returns **no usage object** and Cloudflare still bills it (0.007522115 in
+  analytics). Unmeterable by us is not unbilled — which strengthens its disqualification
+  rather than softening it.
+
+The +0.00905% embedding bias reproduced on three separate days with three different token
+totals. That is genuine replication — the trials differ — where the four "scales" quoted
+in session 4 were one signature seen four times.
+
+### What I got wrong in this session
+
+- **Ran an eight-sample experiment that tested nothing** (bugs.md #26). Three config
+  channels failed to bind silently and a stale server held the port; the control arm had
+  n=8 and the treatment n=0, and every number looked clean. The tell that broke it was
+  two arms billing the identical neuron figure — cost identity as a manipulation check.
+  Now CLAUDE.md §12.
+- **Read five sockets as five servers**, then found it was genuinely five PIDs, but only
+  after checking. One wrangler instance opens several sockets; the first reading happened
+  to be right for the wrong reason.
+- **Probed a candidate source from the wrong machine.** `techboard.com.au/feed` returns a
+  Cloudflare challenge to a local curl and clean RSS to the Worker — the exact inverse of
+  `innovationaus.com/feed`, and a reminder that the probe rule specifies *through the
+  Worker* for a reason.
+- Left `"FRESH_EXCERPTS": "11"` in `wrangler.jsonc` during the experiment. Harmless because
+  nothing was deployed, but it is precisely the shape of §7.1's near-miss, and it only
+  stayed harmless because the deploy gate is a habit rather than a reminder.
