@@ -1409,15 +1409,42 @@ mean identical prompts, which meant the window override was not applied. It was 
   `env.FRESH_EXCERPTS ("11")` … while the handler still read `6`
 
 The banner is not evidence the running code sees the value. The real cause of the last
-one: `TaskStop` killed the wrangler **parent** processes, their `workerd` children
-survived holding `127.0.0.1:8787`, and every request was answered by the **first** server
-— the `FRESH_EXCERPTS=6` one — while three later servers sat behind it. `netstat -ano`
-showed **five distinct PIDs** on the port. A single wrangler instance opens ~5 sockets, so
-socket count alone is not the tell; **distinct PIDs** is.
+one: **`TaskStop` did not stop the dev servers.** Every "restart" left the previous
+`wrangler dev` running, so `127.0.0.1:8787` stayed owned by the **first** server started
+that day — the `FRESH_EXCERPTS=6` one — and answered every request while four later
+servers sat behind it. `netstat -ano` showed **five distinct PIDs** on the port.
 
 **Net effect:** the control arm had n=8 and the treatment arm n=0, and every sample looked
-clean, self-consistent and publishable. Re-run on a fresh port (`--port 8788`, one PID),
-the treatment arm separated immediately.
+clean, self-consistent and publishable. Re-run on a fresh port (`--port 8788`, verified
+one PID), the treatment arm separated immediately.
+
+### Correcting this entry, 2026-08-17 — the cleanup was wrong three more times
+
+Killing the leftovers at the end of the session falsified most of what the paragraph
+above originally said, and each wrong step reported success:
+
+- **First claim, wrong:** *"`TaskStop` killed the parent; the `workerd` children
+  survived."* It is the other way round. **`TaskStop` failed to kill 6 of 8 `wrangler
+  dev` parents outright.** Killing the eight `workerd` children returned SUCCESS on all
+  eight, and the surviving parents **respawned them within seconds** under new PIDs.
+  Killing children is not merely insufficient, it is futile.
+- **Second claim, wrong:** *"a single wrangler instance opens ~5 sockets, so socket
+  count is not the tell."* One instance holds **one LISTENING socket**. The extra
+  `netstat` lines were `ESTABLISHED`/`CLOSE_WAIT` rows from my own curls. The original
+  "five sockets on 8787" reading was five *servers*, and was right by accident after
+  being briefly talked out of it.
+- **Third, and the one that produced a false all-clear:**
+  `Get-NetTCPConnection -State Listen -LocalPort 8787,8788` reported **2** owning
+  processes when plain `netstat -ano | grep LISTENING` showed **8**. Acting on the
+  PowerShell read, 2 parent trees were killed, 10 processes reported SUCCESS, and the
+  job was declared done with six servers still live. Only an explicit re-verification
+  caught it.
+
+What actually worked: take distinct PIDs from `netstat -ano` **LISTENING lines only**,
+resolve each one's `ParentProcessId` via `wmic`, confirm the parent's command line is the
+project's `wrangler-dist/cli.js dev`, then `taskkill /F /T` **the parents** — 6 trees, 30
+processes. Verified after: no listeners, no `workerd`, no `wrangler dev` parents, both
+ports unreachable to curl.
 
 **Practice, now applied.** `/step` reports `freshCharBudget`, `freshChunksUsed` and
 `freshCharsUsed` — the setting **actually applied**, from inside the handler, next to the
@@ -1425,6 +1452,10 @@ result it produced. This is CLAUDE.md §10 in a new costume: a knob verified onl
 the value you passed in always passes. Before trusting a config experiment:
 
 1. Print the effective setting from inside the request, not from the launcher.
-2. `netstat -ano | grep <port>` and count **distinct PIDs**.
+2. `netstat -ano | grep <port>` filtered to **LISTENING**, count **distinct PIDs**, and
+   treat any tool that disagrees with a lower number as the one that is wrong.
 3. Treat an identical cost/latency figure across arms as a failed manipulation until
    proven otherwise — it was the first and cheapest tell here.
+4. **Kill parents, not children, and re-verify after.** A process manager's SUCCESS is a
+   claim about a syscall, not about the port. Cheapest reliable restart is a **fresh
+   port**, which sidesteps the whole problem.

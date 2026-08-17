@@ -273,10 +273,19 @@ number was self-consistent.
   proven otherwise.** Two runs billing `140.83984375` neurons did not process
   different prompts. This was the first and cheapest tell, and it arrived long
   before the diagnosis.
-- **Count distinct PIDs on the port, not sockets.** Killing a dev-server parent can
-  leave the child holding the socket, so the "restart" you just did is still
-  serving the old configuration. One wrangler instance opens several sockets, so
-  socket count proves nothing.
+- **A "restart" is not a restart until the old process is gone.** Every dev-server
+  restart in that session left the previous one running and owning the port, so the
+  first server started that day answered every request for hours. Take distinct PIDs
+  from the **LISTENING** lines of `netstat -ano`, and **kill parents, not children** —
+  killing the eight `workerd` children returned SUCCESS on all eight and their
+  surviving parents respawned them within seconds. The cheapest reliable restart is a
+  **fresh port**.
+- **A tool reporting SUCCESS is describing a syscall, not the world.** Three separate
+  process kills reported success here while the thing being killed carried on, and one
+  read (`Get-NetTCPConnection`) returned 2 owners where `netstat` showed 8 — which
+  produced a confident, wrong all-clear. When two tools disagree about how much is
+  running, the one reporting **less** is the one to distrust, and the check that
+  settles it is the observable effect: can you still reach the port?
 - **State the arm sizes when reporting.** "n=8 vs n=3" makes an n=0 arm impossible
   to hide behind a percentage. This is §11 pointed at your own instrumentation
   rather than at the world.

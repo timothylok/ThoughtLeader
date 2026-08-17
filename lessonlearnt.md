@@ -666,9 +666,15 @@ in session 4 were one signature seen four times.
   n=8 and the treatment n=0, and every number looked clean. The tell that broke it was
   two arms billing the identical neuron figure — cost identity as a manipulation check.
   Now CLAUDE.md §12.
-- **Read five sockets as five servers**, then found it was genuinely five PIDs, but only
-  after checking. One wrangler instance opens several sockets; the first reading happened
-  to be right for the wrong reason.
+- **Got the process diagnosis wrong twice and the cleanup wrong three times.** The
+  original write-up said `TaskStop` killed the parents and orphaned their children; the
+  truth is `TaskStop` failed to kill **6 of 8** parents, and killing the children
+  returned SUCCESS on all eight while the parents respawned them in seconds. Then
+  `Get-NetTCPConnection` reported 2 owning processes where `netstat` showed 8, and I
+  declared the ports clean with six servers still live. Only re-verifying — which I was
+  asked to do, not prompted by any suspicion of my own — caught it. Three kill
+  operations reported SUCCESS while the thing carried on: **a tool's success message
+  describes a syscall, not the world.**
 - **Probed a candidate source from the wrong machine.** `techboard.com.au/feed` returns a
   Cloudflare challenge to a local curl and clean RSS to the Worker — the exact inverse of
   `innovationaus.com/feed`, and a reminder that the probe rule specifies *through the
