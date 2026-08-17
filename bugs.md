@@ -29,7 +29,7 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [21](#bug-21--embeddings-return-no-neurons-field-so--0-meters-them-as-free) | Embeddings return no `neurons` field, so `?? 0` meters them as free | 🔴 Guard failure | **Fixed & measured** |
 | [22](#bug-22--a-finding-is-attributed-to-a-source-that-returned-no-content) | A finding is attributed to a source that returned no content | 🔴 False attribution | ✅ **Fixed & verified** (`8ca445dd`) — and **confirmed in production** on daily run `5a8c9aeb` against the original incident |
 | [23](#bug-23--the-usage-ledger-has-no-model-column-so-the-reconciliation-rule-cannot-be-run) | The usage ledger has no model column, so the reconciliation rule cannot be run | 🟡 Guard observability | ✅ **Fixed & verified** (`764f7709`) — **confirmed in production**: exact per-model match on run `5a8c9aeb` |
-| [24](#bug-24--the-fresh-excerpt-window-is-a-newest-n-cut-and-it-destroyed-a-verdict) | The fresh-excerpt window is a newest-N cut, and it destroyed a verdict | 🔴 Silent research regression | **Fixed & measured** (0/8 → 3/3), uncommitted |
+| [24](#bug-24--the-fresh-excerpt-window-is-a-newest-n-cut-and-it-destroyed-a-verdict) | The fresh-excerpt window is a newest-N cut, and it destroyed a verdict | 🔴 Silent research regression | ✅ **Fixed & measured** (0/8 → 3/3), deployed `15f2e432` |
 | [25](#bug-25--a-finding-is-attributed-to-a-source-that-supplied-none-of-its-content) | A finding is attributed to a source that supplied none of its content | 🔴 False attribution | **Open** — #22's invariant one branch away |
 | [26](#bug-26--eight-samples-of-a-config-experiment-that-tested-nothing) | Eight samples of a config experiment that tested nothing | 🟠 Test validity | Diagnosed; practice added |
 
@@ -1262,7 +1262,7 @@ where nothing failed after an AI call returned.
 
 ## Bug 24 — The fresh-excerpt window is a newest-N cut, and it destroyed a verdict
 
-**Severity:** 🔴 Silent research regression · **Status:** **Fixed & measured** (uncommitted)
+**Severity:** 🔴 Silent research regression · **Status:** ✅ **Fixed, measured and deployed** (`15f2e432`, 2026-08-17)
 
 **How it showed up.** Goal 1 read **Answered** on daily run `5a8c9aeb` (2026-08-13) and
 **Unanswered** on the next three — `b099c83d`, `dc0a0b39`, `8772de4e` — with all three
@@ -1338,6 +1338,10 @@ at `chunksUsed=11 charsUsed=15400`.
 **Cost.** Reasoning neurons per iteration ~142 mean (8,400 chars) → ~193 mean (~15,400
 chars), **+36%**. Estimated whole-run effect ~1,054 → ~1,325 neurons, well under the
 8,000 budget. The report call is unaffected — it reads findings, not chunks.
+
+**Confirmed on the deployed Worker** (`15f2e432`, 2026-08-17): a production `/step`
+returned `budget=16000 chunksUsed=11 charsUsed=14838` — the whole feed — and the finding
+named *"AI, fintech, agtech, and biotech"* as sectors.
 
 **What this does not prove.** The measurement is of iteration 1's **finding**, not of the
 report's **verdict**; the finding → Answered step was not run. One source, one feed
