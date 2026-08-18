@@ -1,4 +1,4 @@
-import type { AiUsage, Reasoning, TerminationReason } from './types.ts';
+import type { AiUsage, FundingEvent, Reasoning, TerminationReason } from './types.ts';
 
 const now = () => Date.now();
 
@@ -200,6 +200,91 @@ export async function clearStop(db: D1Database, runId: string): Promise<void> {
 }
 
 // --- generic control values ------------------------------------------------
+
+/**
+ * Append this iteration's events to the ledger, skipping ones already recorded.
+ *
+ * `ON CONFLICT DO NOTHING` is what makes the enclosing step safe to retry:
+ * Workflows re-runs a step that failed after its writes, and a plain INSERT
+ * would duplicate the ledger the way iteration 11 of run 19ac529b duplicated
+ * findings (bugs.md #7).
+ *
+ * Returns the number ACTUALLY inserted — not the number offered — so a caller
+ * reporting "3 new events" is reporting inserts rather than mentions.
+ */
+export async function recordEvents(
+  db: D1Database,
+  runId: string,
+  n: number,
+  events: FundingEvent[],
+): Promise<number> {
+  if (events.length === 0) return 0;
+  const ts = now();
+  const stmt = db.prepare(
+    `INSERT INTO events
+       (key, company, sector, amount, stage, investors, event_date, source_url, raw, run_id, n, first_seen)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+     ON CONFLICT(key) DO NOTHING`,
+  );
+  const results = await db.batch(
+    events.map((e) =>
+      stmt.bind(
+        e.key,
+        e.company,
+        e.sector,
+        e.amount,
+        e.stage,
+        e.investors,
+        e.eventDate,
+        e.sourceUrl,
+        e.raw,
+        runId,
+        n,
+        ts,
+      ),
+    ),
+  );
+  return results.reduce((sum, r) => sum + (r.meta?.changes ?? 0), 0);
+}
+
+/** Ledger entries, newest first. The prompt's "already recorded" list. */
+export async function recentEvents(
+  db: D1Database,
+  limit: number,
+): Promise<FundingEventRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT company, sector, amount, stage, investors, event_date, source_url, run_id, first_seen
+         FROM events ORDER BY first_seen DESC LIMIT ?`,
+    )
+    .bind(limit)
+    .all<FundingEventRow>();
+  return results;
+}
+
+/** Everything one run added to the ledger — the daily digest's content. */
+export async function eventsForRun(db: D1Database, runId: string): Promise<FundingEventRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT company, sector, amount, stage, investors, event_date, source_url, run_id, first_seen
+         FROM events WHERE run_id = ? ORDER BY first_seen`,
+    )
+    .bind(runId)
+    .all<FundingEventRow>();
+  return results;
+}
+
+export interface FundingEventRow {
+  company: string;
+  sector: string | null;
+  amount: string | null;
+  stage: string | null;
+  investors: string | null;
+  event_date: string | null;
+  source_url: string | null;
+  run_id: string;
+  first_seen: number;
+}
 
 export async function getControl(db: D1Database, key: string): Promise<string | null> {
   const row = await db

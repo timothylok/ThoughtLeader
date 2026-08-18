@@ -1,4 +1,4 @@
-import type { Reasoning } from './types.ts';
+import type { FundingEvent, Reasoning } from './types.ts';
 import type { Recalled } from './memory.ts';
 import { normalizeUrl } from './ingest.ts';
 
@@ -10,14 +10,24 @@ Rules:
 - Ground every claim in the provided material. If it does not support a claim, write "not stated in the sources read so far" rather than guessing.
 - CITE AS YOU WRITE: end every sentence that states a fact with the marker for where that fact came from, e.g. "Farmbot raised a $22 million Series B [S2]." Use ONLY the markers listed under SOURCES YOU MAY CITE, and never write a URL yourself — each marker is replaced with the real URL after you answer, and a URL you type that was not offered to you is deleted. A fact you cannot attribute to a listed marker must not be written.
 - PRIORITISE GOALS THAT PRIOR FINDINGS HAVE NOT YET ANSWERED. If a goal is already covered, do not restate it — work on an open one.
-- BE SPECIFIC: prefer counts, dollar figures, dates, percentages and named entities (companies, investors, places) over general statements. A finding with no proper nouns or numbers is a weak finding.
+- BE SPECIFIC: prefer counts, dollar figures, dates, percentages and named entities (companies, investors, places) over general statements. WHEN YOU HAVE SOMETHING TO REPORT, a finding with no proper nouns or numbers is a weak finding — but see the rule on nothing new below, which outranks this one.
 - Answer the goal that was actually asked. If a goal names particular things (cities, sectors, categories), address those things — do not substitute a different one.
 - Do not repeat a prior finding. Advance the research or name what is still missing.
+- RECORD EVERY FUNDING EVENT in the new material as one line in "events":
+  "company | sector | amount | stage | investors | date | [S#]"
+  Use "-" for any field the material does not state. The marker is required. One line per event.
+- A FUNDING EVENT IS MONEY A COMPANY HAS RECEIVED: a completed raise, round or grant. These are NOT funding events and must never be recorded:
+  a valuation or a change in one; a company SEEKING or TARGETING a raise that has not closed; an IPO plan; revenue, market size or fund size; an acquisition price. If the amount would be negative, it is not a funding event.
+- SECTOR is what the company DOES — travel, fintech, agtech, biotech, robotics, space, mining tech. Never write "AI" or "tech" as the sector; every company here is one of those, so it says nothing.
+- Events listed under ALREADY RECORDED are known. Leave them out of "events" AND out of the finding.
+- NOTHING NEW IS A VALID RESULT. If the material contains no unrecorded event, return "events": [] and a one-line finding saying so. Do NOT restate recalled material to fill the space — a finding that repeats what is already known is worse than a short one.
+- If a BASELINE is given and the material contradicts it — a sector it does not list, an investor it does not rank, a round outside its stated range — say so in the finding, with the marker.
 - Keep the finding under 200 words.
 
 Respond with ONLY a JSON object, no prose or code fences:
 {
   "finding": "what you learned this iteration, grounded in the material, with specifics and a [S#] marker on every fact",
+  "events": ["Company | sector | amount | stage | investors | date | [S1]"],
   "goalsAdvanced": [1],
   "progress": "which goals are now answered, which are still open",
   "newSources": ["URLs that appear in the material you were given, or []"],
@@ -164,6 +174,68 @@ function tidy(s: string): string {
     .trim();
 }
 
+/** Dedupe identity. Punctuation and case must not create a second row. */
+const normKey = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+/** `Sophiie AI` + `Seed` -> `sophiieai|seed`. */
+export const eventKey = (company: string, stage: string | null): string =>
+  `${normKey(company)}|${normKey(stage ?? '')}`;
+
+/**
+ * Turn the model's event lines into ledger rows.
+ *
+ * Lenient by design: a line missing trailing fields still yields an event, and a
+ * line yielding no company is dropped rather than stored blank. The source is
+ * resolved from the line's [S#] marker against the same citable table as the
+ * finding, so a ledger row can no more carry an invented URL than a citation
+ * can (bugs.md #25).
+ */
+export function parseEvents(lines: string[], citable: Citable[]): FundingEvent[] {
+  const byMarker = new Map(citable.map((c) => [c.marker.toUpperCase(), c.url]));
+  const out: FundingEvent[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of lines) {
+    if (typeof raw !== 'string' || raw.trim().length === 0) continue;
+
+    const marker = raw.match(/\[\s*(S\d+)\s*\]/i);
+    const sourceUrl = marker ? (byMarker.get(marker[1]!.toUpperCase()) ?? null) : null;
+
+    const parts = raw
+      .replace(/\[\s*S\d+\s*\]/gi, '')
+      .split('|')
+      .map((f) => f.trim());
+
+    // "-", "?" and "n/a" are how the model says "not stated". Storing those
+    // verbatim would make an unknown look like a value (CLAUDE.md §10).
+    const field = (i: number): string | null => {
+      const v = parts[i] ?? '';
+      return v && !/^([-?]|n\/?a|unknown|not stated)$/i.test(v) ? v.slice(0, 200) : null;
+    };
+
+    const company = field(0);
+    if (!company) continue;
+
+    const stage = field(3);
+    const key = eventKey(company, stage);
+    if (seen.has(key)) continue; // the model repeated itself within one response
+    seen.add(key);
+
+    out.push({
+      key,
+      company,
+      sector: field(1),
+      amount: field(2),
+      stage,
+      investors: field(4),
+      eventDate: field(5),
+      sourceUrl,
+      raw: raw.slice(0, 500),
+    });
+  }
+  return out;
+}
+
 export function buildPrompt(
   topic: string,
   goals: string[],
@@ -172,6 +244,7 @@ export function buildPrompt(
   priorFindings: { n: number; finding: string }[],
   currentUrl: string | null,
   citable: Citable[],
+  context: { baseline: string | null; knownEvents: string[] },
 ): { role: string; content: string }[] {
   const goalList = goals.map((g, i) => `${i + 1}. ${g}`).join('\n');
 
@@ -209,6 +282,18 @@ export function buildPrompt(
           .join('\n\n')
       : '(no earlier material recalled)';
 
+  // The baseline is what divergence is measured against. Absent, the model is
+  // told so plainly rather than left to invent a reference point.
+  const baselineText =
+    context.baseline && context.baseline.trim()
+      ? context.baseline.trim()
+      : '(no baseline recorded yet — record events, and skip divergence flagging)';
+
+  const knownText =
+    context.knownEvents.length > 0
+      ? context.knownEvents.map((e) => `- ${e}`).join('\n')
+      : '(the ledger is empty — everything you find is new)';
+
   const prior =
     priorFindings.length > 0
       ? priorFindings.map((f) => `- [iteration ${f.n}] ${f.finding}`).join('\n')
@@ -233,6 +318,12 @@ export function buildPrompt(
     ``,
     `YOUR PRIOR FINDINGS:`,
     prior,
+    ``,
+    `BASELINE:`,
+    baselineText,
+    ``,
+    `ALREADY RECORDED — do not report these again:`,
+    knownText,
   ].join('\n');
 
   return [
@@ -271,6 +362,11 @@ function fromObject(o: Record<string, unknown>, original: string): Reasoning {
 
   return {
     finding,
+    // Raw lines. Parsed by `parseEvents` once the citable table is known — the
+    // marker cannot be resolved here.
+    events: Array.isArray(o.events)
+      ? o.events.filter((e): e is string => typeof e === 'string')
+      : [],
     progress: typeof o.progress === 'string' ? o.progress.trim() : '',
     // Raw strings only. These are filtered downstream in selectNextSources()
     // against links actually observed on fetched pages — syntax validation here
@@ -285,6 +381,9 @@ function fromObject(o: Record<string, unknown>, original: string): Reasoning {
 function unparsed(text: string): Reasoning {
   return {
     finding: text.trim().slice(0, 2000),
+    // An unparsed response yields no events rather than guessed ones. A ledger
+    // is only useful if every row came from a line the model actually emitted.
+    events: [],
     progress: 'unparsed model response',
     newSources: [],
     done: false,
@@ -322,17 +421,21 @@ export function recallQuery(topic: string, goals: string[], lastProgress: string
   return [topic, ...goals, lastProgress].filter(Boolean).join('\n');
 }
 
-export const REPORT_SYSTEM = `You are writing the final report for a research run.
+export const REPORT_SYSTEM = `You are writing the daily delta report for a loop that tracks change against a baseline.
 
-Structure: one section per goal, in order, headed with the goal text.
+Structure, in this order:
 
-For each goal:
-- Open with a one-word verdict in bold: **Answered**, **Partial**, or **Unanswered**.
-- Then give the direct answer, built ONLY from the findings supplied.
-- Lead with specifics: counts, dollar figures, dates, percentages, named companies, named investors, named places. Vague summary is a failure.
+## New events
+One bullet per funding event in the findings: company — sector, amount, stage, investors, date, and its URL. If the findings contain none, write exactly "None today." and nothing else in this section.
+
+## Divergence from baseline
+Only what the findings explicitly say contradicts the baseline. If the findings say nothing of the kind, write "None."
+
+## Notes
+At most three lines for anything else a human should see. Omit the section entirely if there is nothing.
+
+Rules:
+- Build ONLY from the findings supplied. Add no context, background or interpretation of your own.
 - Cite by copying a URL that already appears inline in the finding you are using, exactly as written. Every finding carries its own citations; a claim with no URL beside it gets no citation, and that is correct rather than a gap to fill. Never construct, complete or guess a URL — not even by adding "www." — and never cite a bare [n] index.
-- If the findings do not answer the goal, say so in one line and state what is missing. Do not pad.
-
-End with a short "Gaps" section listing what a follow-up run should target.
-
-No preamble, no restating the task, no concluding pep talk. Under 800 words.`;
+- "None today." is a complete and correct report. A quiet day is a result, not a failure, and padding it with recalled background is the failure.
+- No preamble, no restating the task, no concluding pep talk. Under 500 words.`;

@@ -9,6 +9,7 @@ import {
   recallQuery,
   citableSources,
   resolveCitations,
+  parseEvents,
 } from './prompt.ts';
 import { alert } from './notify.ts';
 import {
@@ -19,6 +20,8 @@ import {
   pendingSourceCount,
   recordFinding,
   recentFindings,
+  recordEvents,
+  recentEvents,
   getRun,
   listRuns,
   requestStop,
@@ -75,6 +78,18 @@ export default {
             byModel: await usageByModel(env.DB, url.searchParams.get('day') ?? undefined),
             history: await usageHistory(env.DB),
           });
+        case 'GET /events':
+          return json({
+            events: await recentEvents(env.DB, clamp(Number(url.searchParams.get('limit') ?? 50), 1, 500)),
+          });
+        case 'GET /baseline':
+          return json({ baseline: await getControl(env.DB, 'baseline') });
+        case 'POST /baseline': {
+          const body = (await request.json().catch(() => ({}))) as { text?: string };
+          if (typeof body.text !== 'string') return json({ error: 'body must be {"text": "..."}' }, 400);
+          await setControl(env.DB, 'baseline', body.text);
+          return json({ ok: true, chars: body.text.length });
+        }
         case 'GET /search':
           return await search(env, runId, url.searchParams.get('q') ?? '');
         case 'POST /step':
@@ -92,6 +107,9 @@ export default {
               'GET  /state[?run=<id>]',
               'GET  /search?run=<id>&q=<query>',
               'GET  /usage    (neuron spend today + history)',
+              'GET  /events[?limit=50]   (the funding-event ledger, newest first)',
+              'GET  /baseline            (the baseline deltas are measured against)',
+              'POST /baseline {text}     (set it — Claude Code writes this monthly)',
               'GET  /live?run=<id>   (live dashboard)',
               'POST /step?run=<id>   (one iteration, no continuation)',
               'POST /step   {"probe":"<url>"}   (ingest only, CPU probe)',
@@ -484,6 +502,8 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
     num(env.RECALL_TOP_K, 8),
   );
   const prior = await recentFindings(env.DB, runId, 6);
+  const known = await recentEvents(env.DB, 60);
+  const baseline = await getControl(env.DB, 'baseline');
 
   // Same table, same function, same resolver as the workflow — /step is the
   // tool used to debug attribution, so a second derivation here would let the
@@ -499,8 +519,13 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
       prior,
       contributedUrl,
       citable,
+      {
+        baseline,
+        knownEvents: known.map((e) => `${e.company} (${e.stage ?? '—'}, ${e.amount ?? '—'})`),
+      },
     ),
-    max_tokens: 700,
+    // 900 to fit the event lines alongside the finding — matches workflow.ts.
+    max_tokens: 900,
     temperature: 0.4,
   })) as { response?: unknown; usage?: AiUsage };
   // Metered on return, before the D1 writes below (bugs.md #19). Every embed on
@@ -510,7 +535,11 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
   const parsed = parseReasoning(res.response);
   const cited = resolveCitations(parsed.finding, citable);
   const reasoning = { ...parsed, finding: cited.text };
+  const parsedEvents = parseEvents(parsed.events, citable);
   await recordFinding(env.DB, runId, n, contributedUrl, reasoning);
+  // Same writer as the workflow. /step is a second writer to the ledger, so it
+  // has to uphold the same dedupe — this is how #12 became #14.
+  const newEvents = await recordEvents(env.DB, runId, n, parsedEvents);
   await remember(env, runId, [
     { key: findingKey(n), text: reasoning.finding, sourceUrl: contributedUrl ?? '', type: 'finding', n },
   ]);
@@ -542,6 +571,10 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
     // clean table either way (bugs.md #26, CLAUDE.md §12).
     citable,
     citationsDropped: cited.dropped,
+    eventsParsed: parsedEvents,
+    eventsInserted: newEvents,
+    knownEventsShown: known.length,
+    baselinePresent: Boolean(baseline && baseline.trim()),
     reasoning,
     enqueued,
     linksObserved: observedLinks.length,

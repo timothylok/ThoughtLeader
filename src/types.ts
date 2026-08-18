@@ -63,6 +63,32 @@ export interface Reasoning {
   progress: string;
   newSources: string[];
   done: boolean;
+  /**
+   * Funding events, as the model wrote them — one pipe-delimited line each.
+   *
+   * Flat strings rather than nested objects on purpose. `parseReasoning` already
+   * exists because this model wraps JSON in prose and code fences; asking it for
+   * an array of objects raises the failure rate of the step that produces all the
+   * value. A malformed line is dropped and its neighbours survive, which nested
+   * JSON cannot offer.
+   */
+  events: string[];
+}
+
+/** One funding event, after parsing and marker resolution. */
+export interface FundingEvent {
+  /** Dedupe identity: normalised company + stage. */
+  key: string;
+  company: string;
+  sector: string | null;
+  amount: string | null;
+  stage: string | null;
+  investors: string | null;
+  eventDate: string | null;
+  /** Resolved from a [S#] marker against the iteration's citable set — never
+   *  a string the model composed (bugs.md #25). */
+  sourceUrl: string | null;
+  raw: string;
 }
 
 export interface IngestResult {

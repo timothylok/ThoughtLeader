@@ -69,3 +69,30 @@ CREATE TABLE IF NOT EXISTS usage (
 -- INSERT but before the step completes will duplicate the row on retry —
 -- observed as 6 findings for iteration 11 of run 19ac529b.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_unique ON findings (run_id, n);
+
+-- The event ledger. One row per funding event the loop has ever recorded, across
+-- all runs — this is what makes "report only what is new" possible at all.
+--
+-- Dedupe is EXACT, on `key`, not semantic. Recall's top-8 answers "what is
+-- related to this"; change detection asks "have I already reported this", which
+-- is an identity question. A vector index is the wrong instrument for it and a
+-- UNIQUE constraint is the right one.
+CREATE TABLE IF NOT EXISTS events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  key        TEXT NOT NULL,        -- normalised company + stage
+  company    TEXT NOT NULL,
+  sector     TEXT,
+  amount     TEXT,
+  stage      TEXT,
+  investors  TEXT,
+  event_date TEXT,
+  source_url TEXT,                 -- resolved from the [S#] marker, never model-written
+  raw        TEXT NOT NULL,        -- the line as written, so a bad key can be audited
+  run_id     TEXT NOT NULL,
+  n          INTEGER NOT NULL,
+  first_seen INTEGER NOT NULL,
+  UNIQUE (key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_seen ON events (first_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_events_run ON events (run_id, first_seen);

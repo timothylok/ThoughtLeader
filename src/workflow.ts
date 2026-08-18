@@ -13,7 +13,7 @@
  */
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { num, type AiUsage, type Env, type RunParams, type Reasoning, type TerminationReason, type IngestResult } from './types.ts';
+import { num, type AiUsage, type Env, type RunParams, type Reasoning, type TerminationReason, type IngestResult, type FundingEvent } from './types.ts';
 import { fetchSource, chunk, freshExcerpts, selectNextSources } from './ingest.ts';
 import { recall, remember, chunkKey, findingKey, type Recalled } from './memory.ts';
 import {
@@ -22,6 +22,7 @@ import {
   recallQuery,
   citableSources,
   resolveCitations,
+  parseEvents,
   stripUngroundedUrls,
   urlsIn,
   REPORT_SYSTEM,
@@ -35,6 +36,10 @@ import {
   addedSourceCount,
   recordFinding,
   recentFindings,
+  recordEvents,
+  recentEvents,
+  eventsForRun,
+  getControl,
   finishRun,
   failRun,
   isStopRequested,
@@ -69,6 +74,20 @@ export const FRESH_CHARS_DEFAULT = 16_000;
 
 /** Ceiling on model-proposed sources per run, on top of the per-iteration cap. */
 const MAX_ADDED_SOURCES_PER_RUN = 10;
+
+/**
+ * Ledger entries shown to the model as "already recorded".
+ *
+ * A window, not the whole table — the ledger grows without bound and the prompt
+ * does not. 60 entries is roughly a fortnight at the observed ~5 events/day, so
+ * a re-reported item is caught while it is still circulating in the feeds. Past
+ * that the dedupe still holds: UNIQUE(key) rejects the row even when the model
+ * offers it again, so the window governs prompt noise, not correctness.
+ */
+const KNOWN_EVENTS_IN_PROMPT = 60;
+
+/** `control` row holding the Claude Code baseline the deltas are measured against. */
+const BASELINE_KEY = 'baseline';
 
 export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
   async run(event: WorkflowEvent<RunParams>, step: WorkflowStep): Promise<void> {
@@ -186,8 +205,12 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
         const reasoning = await step.do(
           `reason:${n}`,
           { retries: { limit: 2, delay: '15 seconds', backoff: 'exponential' }, timeout: '2 minutes' },
-          async (): Promise<Reasoning & { neurons: number }> => {
+          async (): Promise<Reasoning & { neurons: number; parsedEvents: FundingEvent[] }> => {
             const prior = await recentFindings(env.DB, runId, PRIOR_FINDINGS_IN_PROMPT);
+            // The ledger spans runs, so this is the only cross-day state the loop
+            // has. Exact identity, not similarity — see schema.sql `events`.
+            const known = await recentEvents(env.DB, KNOWN_EVENTS_IN_PROMPT);
+            const baseline = await getControl(env.DB, BASELINE_KEY);
             // Built ONCE and used twice — to render the prompt and to resolve
             // what comes back. Deriving it separately at each end is how /step
             // and the workflow drifted apart over the excerpt window (#24).
@@ -206,10 +229,20 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
               prior,
               contributedUrl,
               citable,
+              {
+                baseline,
+                knownEvents: known.map(
+                  (e) => `${e.company} (${e.stage ?? '—'}, ${e.amount ?? '—'})`,
+                ),
+              },
             );
             const res = (await env.AI.run(env.REASON_MODEL, {
               messages,
-              max_tokens: 700,
+              // 900, not 700: the response now carries the event lines as well as
+              // the finding, and a truncated response parses as `unparsed` — which
+              // yields NO events at all. Output tokens are billed as generated, so a
+              // higher ceiling costs nothing unless it is used.
+              max_tokens: 900,
               temperature: 0.4,
             })) as { response?: unknown; usage?: AiUsage };
             // Metered before parsing, not at the end of the iteration. This step
@@ -228,13 +261,22 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
                 `[${runId}] n=${n} dropped ungrounded citations: ${cited.dropped.join(', ')}`,
               );
             }
-            return { ...parsed, finding: cited.text, neurons };
+            // Events are parsed HERE, where `citable` exists — their source URL
+            // is resolved from the same table as the finding's citations, so a
+            // ledger row cannot carry a URL the iteration was never offered.
+            const parsedEvents = parseEvents(parsed.events, citable);
+            return { ...parsed, finding: cited.text, parsedEvents, neurons };
           },
         );
 
         // 5. Commit: finding to D1, finding to vector memory, new sources queued.
         const recorded = await step.do(`record:${n}`, async () => {
           const findingId = await recordFinding(env.DB, runId, n, contributedUrl, reasoning);
+
+          // Idempotent by UNIQUE(key) + DO NOTHING, because this step retries and
+          // Workflows re-runs everything in it (bugs.md #7). The count returned is
+          // rows INSERTED, not events offered — a re-report adds nothing.
+          const newEvents = await recordEvents(env.DB, runId, n, reasoning.parsedEvents);
 
           const remembered = await remember(env, runId, [
             {
@@ -266,7 +308,7 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
           // No metering here. Every AI call above already recorded itself the
           // moment it returned (bugs.md #17 covered which calls, #19 covered
           // when). Aggregating at step end is what lost the retried attempts.
-          return { findingId, enqueued };
+          return { findingId, enqueued, newEvents };
         });
 
         lastProgress = reasoning.progress;
@@ -299,6 +341,7 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
 
         console.log(
           `[${runId}] n=${n} chunks=${ingested.chunks} recalled=${recalled.items.length} ` +
+            `events=${recorded.newEvents}/${reasoning.parsedEvents.length} ` +
             `enqueued=${recorded.enqueued} neurons=${reasoning.neurons.toFixed(1)} ` +
             `spentToday=${assessed.spentToday.toFixed(0)}/${budget || '∞'}` +
             `${ingested.error ? ` err=${ingested.error}` : ''}`,
@@ -316,6 +359,25 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
           // retried (bugs.md #19). `synthesise` now meters itself on return.
           const { report, neurons } = await this.synthesise(runId, topic, goals);
           await finishRun(env.DB, runId, terminal!, report);
+
+          // Push the result rather than waiting to be asked. An unattended loop
+          // whose output has to be fetched gets read on the days someone
+          // remembers to fetch it; the point of a daily delta is a daily look.
+          // `alert` never throws and no-ops when the webhook is unset.
+          const added = await eventsForRun(env.DB, runId);
+          await alert(
+            env,
+            `run ${runId} done — ${added.length} new event(s), ${terminal}`,
+            added.length > 0
+              ? added
+                  .map(
+                    (e) =>
+                      `• ${e.company} — ${e.sector ?? '—'}, ${e.amount ?? '—'}, ` +
+                      `${e.stage ?? '—'}${e.source_url ? ` ${e.source_url}` : ''}`,
+                  )
+                  .join('\n')
+              : 'No new events today.',
+          );
           // Inside the step so it is cached with it, rather than re-firing on
           // every replay of the terminal branch.
           if (terminal === 'budget-exhausted') {
