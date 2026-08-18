@@ -79,16 +79,23 @@
     // HARD SPEND STOP. Neurons per UTC day across all runs; the loop terminates
     // with reason='budget-exhausted' when reached.
     //
-    // 8000, NOT the 10000 free allocation. Cloudflare's analytics dataset and the
-    // counter that actually enforces the allocation disagree: on UTC 2026-08-11
-    // aiInferenceAdaptiveGroups reported 8,670.74 neurons while the platform was
-    // already refusing calls with AiError 4006 ("used up your daily free
-    // allocation of 10,000"). Re-queried 75 min later, unchanged — so this is a
-    // real ~13% gap, not pipeline lag. At 10000 the loop gets cut off mid-flight
-    // and loses its report; at 8000 it terminates itself first, with a report.
+    // Set to the full 10000 free allocation on 2026-08-18, by request.
+    //
+    // Keep the measurement that argued for 8000: Cloudflare's analytics dataset
+    // and the counter that actually enforces the allocation disagree. On UTC
+    // 2026-08-11 aiInferenceAdaptiveGroups reported 8,670.74 neurons while the
+    // platform was already refusing calls with AiError 4006 ("used up your daily
+    // free allocation of 10,000"), unchanged when re-queried 75 min later — a
+    // real ~13% gap, not pipeline lag. So this guard and the platform's own
+    // counter do not trip together: at 10000 ours may never fire, and the run is
+    // cut off mid-flight by AiError 4006 and loses its report, where at 8000 it
+    // terminated itself first and still wrote one.
+    //
+    // A daily run costs ~1100-1200 neurons, so the headroom is ~8x either way;
+    // this matters when several runs or a session of /step probes share a day.
     //
     // Cloudflare budget alerts do NOT cap usage — this is the only real stop.
     // Set 0 for unlimited (you are then trusting maxIterations alone).
-    "DAILY_NEURON_BUDGET": "8000"
+    "DAILY_NEURON_BUDGET": "10000"
   }
 }
