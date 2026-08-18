@@ -1354,7 +1354,7 @@ stop being that as the feed grows.
 
 ## Bug 25 — A finding is attributed to a source that supplied none of its content
 
-**Severity:** 🔴 False attribution · **Status:** **Open**
+**Severity:** 🔴 False attribution · **Status:** **Fixed 2026-08-18, version `030dc506`**
 
 **How it showed up.** `dc0a0b39`'s report (2026-08-15):
 
@@ -1391,6 +1391,107 @@ are individually true, so nothing in the run looks wrong. It is the same defect 
 `Recalled.sourceUrl` and already rendered in the `[mem n]` block); or restrict the
 report's citable set to the source that produced each finding; or require per-claim
 attribution in the finding schema. The first is closest to the existing grain.
+
+### Both cheap candidates above were already implemented — corrected 2026-08-18
+
+**Candidate 1 was a no-op, and it was the recommended fix.** `prompt.ts:49` has
+rendered the origin of every recalled excerpt since the first run:
+
+```
+[mem 3] (chunk, relevance 0.812, from https://techcouncil.com.au/feed)
+```
+
+The model has been shown the true origin of every recalled fact in every iteration
+of every run to date, and it still produced `f9da95d4` n=4. Implementing "carry the
+sourceUrl into the prompt" would have produced a clean diff, a passing test and no
+behaviour change. **Candidate 2 is the current behaviour** — `REPORT_SYSTEM` already
+restricts the report to the SOURCE line of the finding it is using, and that
+restriction is the mechanism of the bug, not a fix for it.
+
+**The root cause is narrower than this entry first stated.** The pipeline has
+exactly **one attribution slot per finding**, and the report is *instructed* to copy
+it onto every claim:
+
+| stage | site | effect |
+|---|---|---|
+| stamp | `workflow.ts:165` | one `contributedUrl` per iteration |
+| store | `findings.source_url` | one URL per finding row |
+| render | `workflow.ts:351` | `[4] SOURCE: <that one url>` |
+| cite | `REPORT_SYSTEM` | *"copied exactly from the SOURCE line"* |
+
+A finding blob mixes the just-read source, up to 8 recalled chunks and prior
+findings; one URL is then asserted over all of it. **No amount of extra context in
+the reasoning prompt can fix a single-slot data model.** It also predicts
+`dc0a0b39`'s shape exactly: give the report a *set* of URLs per finding and it cites
+all of them for one claim, which is what it did.
+
+### Fixed & verified 2026-08-18, version `030dc506`
+
+**Invariant closed:** *every URL surviving in a finding — and in the report — was
+offered to that iteration as the origin of material it was actually given.*
+
+Attribution became per-claim, and the model never handles a URL. It is shown
+markers and writes markers; this code resolves them. That is the same trust model as
+`selectNextSources`, where a fabricated URL is impossible **by construction** rather
+than forbidden by instruction (#12, #13) — the model can only emit an index, and an
+index we did not issue resolves to nothing.
+
+| site | change |
+|---|---|
+| `citableSources()` | builds the table: `[S1]` = the source read (only when it contributed — #22), then the distinct origins of recalled material |
+| `buildPrompt()` | renders `SOURCES YOU MAY CITE`, tags the fresh block `[S1]` and each `[mem n]` with `cite as [Sk]` |
+| `SYSTEM` | one rule: end every factual sentence with its marker; never write a URL |
+| `resolveCitations()` | markers → real URLs; unknown markers removed |
+| `stripUngroundedUrls()` | **and** any URL typed by hand that was not offered |
+| `workflow.ts` reason step | resolves before the finding is stored, so D1 *and* the finding vector carry per-claim origins |
+| `workflow.ts` synthesise | **the `SOURCE:` line is gone** — findings carry their own citations, and the report is swept against the URLs the findings actually contained |
+| `index.ts` `/step` | same table, same resolver, and both echoed in the response (§12) |
+
+**Comparison is canonical on both sides.** A canonical allow-list checked against a
+verbatim string is not canonicalisation (#14) — here it would silently drop a
+legitimate citation rather than admit a duplicate.
+
+**A recalled *finding* donates the URLs it already cites.** Those name the documents
+that supplied its facts, which is not the same as the source read the iteration it
+was written. Without carrying them forward, restating a prior finding re-attributes
+it to that one source and #25 propagates one iteration at a time — the failure mode
+`remember`'s own comment warns about under #22.
+
+**Verification.**
+
+- **15 unit tests** on the pure functions (table construction, dedupe, marker
+  resolution, unknown-marker removal, hand-written-URL sweep, report sweep). All pass.
+- **Live repro on the deployed Worker**, run `9c936389`, seeded techcouncil →
+  `Australia` wikitext → `Economy_of_Australia` wikitext:
+
+  | n | read | recalled | markers offered | `$248.5bn` cited to |
+  |---|---|---|---|---|
+  | 2 | `…title=Australia` | 8 | S1 wiki, S2 techcouncil | **techcouncil** ✅ |
+  | 3 | `…Economy_of_Australia` | 8 | S1 wiki, S2 techcouncil, S3 wiki | **techcouncil** ✅ |
+
+  Iteration 3 is the stronger test: **two** Wikipedia URLs were offered as valid
+  markers and it used neither. The stored row for n=2 is the bug's exact shape —
+  `source_url` = Wikipedia, claim cited to techcouncil — where every run to date put
+  Wikipedia on the claim itself.
+- **The manipulation is verified, not assumed** (§12): `recalled: 8` in both, and the
+  `citable` table is echoed from inside the handler. An arm where recall returned
+  nothing would have produced the same clean-looking finding and tested nothing.
+
+**What this verification cannot prove.**
+
+- **The report step was not exercised live.** `/step` runs one iteration and never
+  synthesises. The `SOURCE:`-line removal, the `REPORT_SYSTEM` rewrite and the report
+  sweep are covered by unit tests only; the 16:00Z run on 2026-08-19 is their first
+  real test. **What to look for:** citations that differ *within* one goal's section,
+  and no Wikipedia URL on the `$248.5bn` figure.
+- **The drop path never fired live.** `citationsDropped` was `[]` in all three
+  iterations — the model used only offered markers and typed no URLs. Every negative
+  case is unit-tested and none is production-observed, which is the weaker half of
+  this evidence.
+- **No retry.** `record:n` remains idempotent by inspection, not by test — #19 again.
+
+**Out-of-band spend:** ~763 neurons on UTC 2026-08-18 (3 `/step` calls), on top of
+that day's 1,091.79 run. It will show as a gap in any later reconciliation of 08-18.
 
 ---
 

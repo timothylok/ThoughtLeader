@@ -16,7 +16,16 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { num, type AiUsage, type Env, type RunParams, type Reasoning, type TerminationReason, type IngestResult } from './types.ts';
 import { fetchSource, chunk, freshExcerpts, selectNextSources } from './ingest.ts';
 import { recall, remember, chunkKey, findingKey, type Recalled } from './memory.ts';
-import { buildPrompt, parseReasoning, recallQuery, REPORT_SYSTEM } from './prompt.ts';
+import {
+  buildPrompt,
+  parseReasoning,
+  recallQuery,
+  citableSources,
+  resolveCitations,
+  stripUngroundedUrls,
+  urlsIn,
+  REPORT_SYSTEM,
+} from './prompt.ts';
 import { alert } from './notify.ts';
 import {
   claimSource,
@@ -179,6 +188,16 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
           { retries: { limit: 2, delay: '15 seconds', backoff: 'exponential' }, timeout: '2 minutes' },
           async (): Promise<Reasoning & { neurons: number }> => {
             const prior = await recentFindings(env.DB, runId, PRIOR_FINDINGS_IN_PROMPT);
+            // Built ONCE and used twice — to render the prompt and to resolve
+            // what comes back. Deriving it separately at each end is how /step
+            // and the workflow drifted apart over the excerpt window (#24).
+            const citable = citableSources(contributedUrl, recalled.items);
+            // The effective attribution table, logged from inside the code path
+            // that uses it rather than from the value passed in (CLAUDE.md §12).
+            console.log(
+              `[${runId}] n=${n} citable: ` +
+                (citable.map((c) => `${c.marker}=${c.url}`).join(' ') || '(none)'),
+            );
             const messages = buildPrompt(
               topic,
               goals,
@@ -186,6 +205,7 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
               recalled.items,
               prior,
               contributedUrl,
+              citable,
             );
             const res = (await env.AI.run(env.REASON_MODEL, {
               messages,
@@ -195,7 +215,20 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
             // Metered before parsing, not at the end of the iteration. This step
             // retries twice, and Cloudflare bills each attempt (bugs.md #19).
             const neurons = await meterCall(env.DB, env.REASON_MODEL, res.usage);
-            return { ...parseReasoning(res.response), neurons };
+
+            const parsed = parseReasoning(res.response);
+            // Markers become real URLs here, and anything cited that was never
+            // offered is removed. The finding is stored already attributed, so
+            // every downstream reader — the report, and recall in later
+            // iterations — sees per-claim origins instead of one URL asserted
+            // over the whole blob (bugs.md #25).
+            const cited = resolveCitations(parsed.finding, citable);
+            if (cited.dropped.length) {
+              console.log(
+                `[${runId}] n=${n} dropped ungrounded citations: ${cited.dropped.join(', ')}`,
+              );
+            }
+            return { ...parsed, finding: cited.text, neurons };
           },
         );
 
@@ -338,19 +371,16 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
     const findings = await recentFindings(this.env.DB, runId, 60);
     if (findings.length === 0) return { report: 'No findings were recorded.', neurons: 0 };
 
-    // The URL must travel with the finding. Without it the report prompt still
-    // demands a citation and the model supplies one anyway — either the bare
-    // `[n]` index or a URL reconstructed from an entity name (bugs.md #13).
-    const body = findings
-      // A finding with no source_url was synthesised from recalled material, not
-      // read from a page. Saying so explicitly stops the report inventing an
-      // attribution for it — closing the table side of #22 alone would leave the
-      // false citation free to reappear in the deliverable.
-      .map(
-        (f) =>
-          `[${f.n}] SOURCE: ${f.source_url || 'NONE — synthesised from earlier material; do NOT cite a URL for this finding'}\n${f.finding}`,
-      )
-      .join('\n\n');
+    // No SOURCE line. Findings now carry their citations inline, per claim, so
+    // the single URL that used to head each one has nothing left to say — and
+    // saying it anyway is the bug: one source asserted over a blob that mixes
+    // several, which the report then dutifully copied onto every claim in it
+    // (bugs.md #25). A finding that cites nothing yields no citation, which is
+    // the right answer rather than a gap for the model to fill (#22).
+    //
+    // `findings.source_url` still records what the iteration read. It is kept
+    // for /state and the sources table; it is no longer evidence of origin.
+    const body = findings.map((f) => `[${f.n}] ${f.finding}`).join('\n\n');
     const res = (await this.env.AI.run(this.env.REASON_MODEL, {
       messages: [
         { role: 'system', content: REPORT_SYSTEM },
@@ -366,8 +396,12 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
     // Metered on return, before the caller's `finishRun` can throw (bugs.md #19).
     const neurons = await meterCall(this.env.DB, this.env.REASON_MODEL, res.usage);
 
+    // Last gate on the deliverable: a URL may appear in the report only if a
+    // finding actually carried it. #13, #22 and #25 all reached the user here,
+    // and an invariant enforced one step upstream is not enforced (§9).
+    const raw = (res.response ?? '').trim();
     return {
-      report: (res.response ?? '').trim() || body,
+      report: raw ? stripUngroundedUrls(raw, urlsIn(body)) : body,
       neurons,
     };
   }

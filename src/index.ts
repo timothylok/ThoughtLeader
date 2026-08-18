@@ -3,7 +3,13 @@ import LIVE_HTML from '../liverun.html';
 import { num, type AiUsage, type Env, type StartRequest } from './types.ts';
 import { fetchSource, chunk, freshExcerpts, selectNextSources, normalizeUrl } from './ingest.ts';
 import { recall, remember, chunkKey, findingKey } from './memory.ts';
-import { buildPrompt, parseReasoning, recallQuery } from './prompt.ts';
+import {
+  buildPrompt,
+  parseReasoning,
+  recallQuery,
+  citableSources,
+  resolveCitations,
+} from './prompt.ts';
 import { alert } from './notify.ts';
 import {
   createRun,
@@ -479,6 +485,11 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
   );
   const prior = await recentFindings(env.DB, runId, 6);
 
+  // Same table, same function, same resolver as the workflow — /step is the
+  // tool used to debug attribution, so a second derivation here would let the
+  // two diverge invisibly (bugs.md #24, CLAUDE.md §9).
+  const citable = citableSources(contributedUrl, recalled.items);
+
   const res = (await env.AI.run(env.REASON_MODEL, {
     messages: buildPrompt(
       topic,
@@ -487,6 +498,7 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
       recalled.items,
       prior,
       contributedUrl,
+      citable,
     ),
     max_tokens: 700,
     temperature: 0.4,
@@ -495,7 +507,9 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
   // this path already recorded itself inside `embed()`.
   await meterCall(env.DB, env.REASON_MODEL, res.usage);
 
-  const reasoning = parseReasoning(res.response);
+  const parsed = parseReasoning(res.response);
+  const cited = resolveCitations(parsed.finding, citable);
+  const reasoning = { ...parsed, finding: cited.text };
   await recordFinding(env.DB, runId, n, contributedUrl, reasoning);
   await remember(env, runId, [
     { key: findingKey(n), text: reasoning.finding, sourceUrl: contributedUrl ?? '', type: 'finding', n },
@@ -522,6 +536,12 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
     freshChunksUsed: fresh.length,
     freshCharsUsed: fresh.reduce((a, t) => a + t.length, 0),
     recalled: recalled.items.length,
+    // The attribution table that was actually applied, and what it rejected.
+    // Reported from inside the handler for the same reason as the window above:
+    // an experiment that cannot show its own treatment was applied produces a
+    // clean table either way (bugs.md #26, CLAUDE.md §12).
+    citable,
+    citationsDropped: cited.dropped,
     reasoning,
     enqueued,
     linksObserved: observedLinks.length,
