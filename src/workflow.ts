@@ -430,8 +430,36 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
     topic: string,
     goals: string[],
   ): Promise<{ report: string; neurons: number }> {
-    const findings = await recentFindings(this.env.DB, runId, 60);
-    if (findings.length === 0) return { report: 'No findings were recorded.', neurons: 0 };
+    const [findings, added] = await Promise.all([
+      recentFindings(this.env.DB, runId, 60),
+      eventsForRun(this.env.DB, runId),
+    ]);
+
+    // The "new events" list is built from the LEDGER, not from the findings'
+    // prose, because only the UNIQUE(key) insert knows what was actually novel.
+    // On run 35e0c08b the model re-offered Nybro despite it being listed as
+    // already recorded; the constraint rejected the row, but the finding still
+    // described it — so a report written from prose would have announced an
+    // event we already had as new. The model formats nothing here and decides
+    // nothing; it is handed the answer.
+    const eventList =
+      added.length > 0
+        ? added
+            .map(
+              (e) =>
+                `* ${e.company} — ` +
+                [e.sector, e.amount, e.stage, e.investors, e.event_date]
+                  .filter(Boolean)
+                  .join(', ') +
+                (e.source_url ? ` ${e.source_url}` : ''),
+            )
+            .join('\n')
+        : 'None today.';
+    const eventSection = `## New events\n${eventList}\n\n`;
+
+    if (findings.length === 0) {
+      return { report: `${eventSection}## Divergence from baseline\nNone.`, neurons: 0 };
+    }
 
     // No SOURCE line. Findings now carry their citations inline, per claim, so
     // the single URL that used to head each one has nothing left to say — and
@@ -462,8 +490,10 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
     // finding actually carried it. #13, #22 and #25 all reached the user here,
     // and an invariant enforced one step upstream is not enforced (§9).
     const raw = (res.response ?? '').trim();
+    // The ledger section is ours and is already grounded; only the model's half
+    // is swept. Its URLs must have come from a finding (bugs.md #13, #22, #25).
     return {
-      report: raw ? stripUngroundedUrls(raw, urlsIn(body)) : body,
+      report: eventSection + (raw ? stripUngroundedUrls(raw, urlsIn(body)) : body),
       neurons,
     };
   }

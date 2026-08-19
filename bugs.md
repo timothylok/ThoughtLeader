@@ -1560,3 +1560,100 @@ the value you passed in always passes. Before trusting a config experiment:
 4. **Kill parents, not children, and re-verify after.** A process manager's SUCCESS is a
    claim about a syscall, not about the port. Cheapest reliable restart is a **fresh
    port**, which sidesteps the whole problem.
+
+---
+
+## Bug 27 — The event ledger deduped on a field that is usually absent
+
+**Severity:** 🟠 Silent data corruption · **Status:** **Fixed 2026-08-19, version `1d87e405`**
+
+**Predicted, then confirmed by data.** `eventKey` was `company + stage`, and the session
+7 handoff flagged it as "the most likely early defect, unmeasured". The first delta run
+(`35e0c08b`) measured it:
+
+| field | present |
+|---|---|
+| `amount` | **4 of 4** ledger rows |
+| `stage` | 2 of 4 |
+
+Two failure modes, in opposite directions:
+
+- **Collapse.** Two different stageless rounds by one company both key to `farmbot|` and
+  the second is silently rejected as a duplicate. A missed round is invisible.
+- **Duplication.** The same round reported with a stage by one source and without by
+  another gives `visaibleai|seed` and `visaibleai|` — two rows, and the second is
+  announced as new.
+
+**Fixed** by keying on `company + normAmount(amount)`: `$20 million`, `$20m`, `20mn` and
+`$20,000,000` all normalise to `20000000`, currency prefixes are dropped, and a genuinely
+different round has a different number so it still records. Amount is the headline figure,
+so it is stated when anything is.
+
+**The four existing rows were migrated**, not cleared, by a script that *imported the
+Worker's own `eventKey`* rather than reimplementing it — a migration that reimplements the
+key it migrates to agrees with itself and disagrees with production (CLAUDE.md §9).
+Verified afterwards by a live `/step`: the model re-offered Nybro, `UNIQUE(key)` rejected
+it, `eventsInserted: 0`.
+
+---
+
+## Bug 28 — The report announced already-recorded events as new
+
+**Severity:** 🔴 Wrong deliverable · **Status:** **Fixed 2026-08-19, version `c3e9f5ef`**
+
+**Found by testing, not by the run.** `35e0c08b`'s report was correct — Nybro genuinely
+was new that day. Re-running the same source afterwards exposed it: the model **re-offered
+Nybro despite it being listed under ALREADY RECORDED**, the ledger's `UNIQUE(key)`
+correctly rejected the row, *and the finding still described it*. The report's
+`## New events` section was written from the findings' prose, so it would have announced
+an event we already had as new.
+
+**The invariant:** *the report's "New events" section lists exactly the rows this run
+inserted.* Prose cannot satisfy it, because only the `ON CONFLICT DO NOTHING` insert knows
+what was novel — the model does not have the constraint's knowledge and no amount of
+prompting gives it that.
+
+**Fixed structurally rather than by instruction.** `synthesise` now renders that section
+from `eventsForRun(runId)` in code; the model is handed the answer and asked only for
+divergence and notes. Its half is still swept for ungrounded URLs (#13, #22, #25); the
+ledger half needs no sweeping because we wrote it.
+
+**Verified** on real run `dd207e98` against a feed whose only funding item was already in
+the ledger: **`## New events` → `None today.`** Prompting alone had already failed three
+times on this exact behaviour — iteration 2 of `35e0c08b`, the `/step` above, and the
+Notes section of `dd207e98`.
+
+---
+
+## Bug 29 — A seed was validated for shape and never for content
+
+**Severity:** 🟡 Wasted iteration · **Status:** **Fixed 2026-08-19** (brief change, no deploy)
+
+`smartcompany.com.au/feed` was added on 2026-08-18 on the strength of §6's probe — "real
+RSS, 18,718 ch / 15 chunks, the best untested candidate". It extracts perfectly and
+carries **no funding events at all**: its ten items are a Google Drive outage, an Easter
+public holiday, an instant asset write-off, a data breach, AirPods, a Glassons store
+opening, the ATO, JB Hi-Fi's share price, an ad-watchdog ruling and NSW battery discounts.
+
+Iteration 3 of `35e0c08b` correctly reported "no new events found". The loop was right;
+the source was wrong. **This is CLAUDE.md §5 repeating verbatim** — extractability and
+relevance are two separate validations, and only the first was run.
+
+**Fixed** by switching to `smartcompany.com.au/startupsmart/feed/` (18,821 ch / 16 chunks
+through the Worker), which carries the funding roundups the main feed buries.
+
+**What the search also established, and it is the more useful result:**
+
+| candidate | verdict |
+|---|---|
+| `startupsmart/feed` | ✅ on-topic; roundups name companies but **amounts are behind the link** |
+| `techboard.com.au/feed` | ❌ for daily events — publishes *reviews* ("AI Funding Data Review FY18-FY25"). This is **baseline** material for the Claude Code pass, not delta material |
+| `australianfintech.com.au/feed` | ❌ mostly appointments and corporate results |
+| Google News RSS query | ❌ high yield but **1 of 13 items Australian**; `gl=AU` sets the edition, not the subject |
+
+**There is no second daily Australian funding-event feed among the candidates tested.**
+Startup Daily is the engine. Recorded because the next person will otherwise go looking
+again — and because a roundup that names eight companies without their amounts is why
+`parseEvents` now refuses to record an event with no amount.
+
+---

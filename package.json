@@ -10,7 +10,8 @@
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
     "db:schema": "wrangler d1 execute research-log --remote --file=./schema.sql",
-    "instances": "wrangler workflows instances list research-loop"
+    "instances": "wrangler workflows instances list research-loop",
+    "test": "node --experimental-strip-types --no-warnings test/run.mjs"
   },
   "license": "ISC",
   "devDependencies": {

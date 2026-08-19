@@ -16,10 +16,11 @@ Rules:
 - RECORD EVERY FUNDING EVENT in the new material as one line in "events":
   "company | sector | amount | stage | investors | date | [S#]"
   Use "-" for any field the material does not state. The marker is required. One line per event.
+- AN EVENT WITHOUT AN AMOUNT IS NOT RECORDABLE. If the material names a company but does not say how much it received, leave it out entirely — a roundup that lists eight companies without their amounts yields no events.
 - A FUNDING EVENT IS MONEY A COMPANY HAS RECEIVED: a completed raise, round or grant. These are NOT funding events and must never be recorded:
   a valuation or a change in one; a company SEEKING or TARGETING a raise that has not closed; an IPO plan; revenue, market size or fund size; an acquisition price. If the amount would be negative, it is not a funding event.
-- SECTOR is what the company DOES — travel, fintech, agtech, biotech, robotics, space, mining tech. Never write "AI" or "tech" as the sector; every company here is one of those, so it says nothing.
-- Events listed under ALREADY RECORDED are known. Leave them out of "events" AND out of the finding.
+- SECTOR is what the company DOES — travel, fintech, agtech, biotech, robotics, space, mining tech. Never write "AI" or "tech" as the sector; every company here is one of those, so it says nothing. A company's NAME is not its sector: "Sophiie AI" is a voice-assistant company, not an "AI" one.
+- Events listed under ALREADY RECORDED are known. Leave them out of "events" AND out of the finding — do not mention them at all, not even to say they are already recorded. Naming them again puts them back into memory for later iterations to recall and restate.
 - NOTHING NEW IS A VALID RESULT. If the material contains no unrecorded event, return "events": [] and a one-line finding saying so. Do NOT restate recalled material to fill the space — a finding that repeats what is already known is worse than a short one.
 - If a BASELINE is given and the material contradicts it — a sector it does not list, an investor it does not rank, a round outside its stated range — say so in the finding, with the marker.
 - Keep the finding under 200 words.
@@ -177,9 +178,34 @@ function tidy(s: string): string {
 /** Dedupe identity. Punctuation and case must not create a second row. */
 const normKey = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
 
-/** `Sophiie AI` + `Seed` -> `sophiieai|seed`. */
-export const eventKey = (company: string, stage: string | null): string =>
-  `${normKey(company)}|${normKey(stage ?? '')}`;
+/**
+ * "$20 million" / "$20m" / "A$1.75m" -> "20000000" / "1750000".
+ *
+ * Scale words and currency prefixes are noise for identity; the number is not.
+ */
+function normAmount(raw: string | null): string {
+  if (!raw) return '';
+  const m = raw.replace(/,/g, '').match(/([\d.]+)\s*(b|bn|billion|m|mn|million|k|thousand)?/i);
+  if (!m) return '';
+  const n = Number(m[1]);
+  if (!Number.isFinite(n)) return '';
+  const scale = (m[2] ?? '').toLowerCase();
+  const mult = scale.startsWith('b') ? 1e9 : scale.startsWith('m') ? 1e6 : scale.startsWith('k') || scale.startsWith('t') ? 1e3 : 1;
+  return String(Math.round(n * mult));
+}
+
+/**
+ * `Sophiie AI` + `$5 million` -> `sophiieai|5000000`.
+ *
+ * Keyed on AMOUNT, not stage. Stage was the first choice and the first delta run
+ * disproved it: stage was null on 2 of 4 ledger rows while amount was present on
+ * 4 of 4 — it is the headline number, so it is nearly always stated. Keying on a
+ * field that is usually absent collapses every stageless event of one company
+ * into a single row, and lets the same round reappear under a new key the moment
+ * one source happens to mention "Seed".
+ */
+export const eventKey = (company: string, amount: string | null): string =>
+  `${normKey(company)}|${normAmount(amount)}`;
 
 /**
  * Turn the model's event lines into ledger rows.
@@ -216,8 +242,8 @@ export function parseEvents(lines: string[], citable: Citable[]): FundingEvent[]
     const company = field(0);
     if (!company) continue;
 
-    const stage = field(3);
-    const key = eventKey(company, stage);
+    const amount = field(2);
+    const key = eventKey(company, amount);
     if (seen.has(key)) continue; // the model repeated itself within one response
     seen.add(key);
 
@@ -225,8 +251,8 @@ export function parseEvents(lines: string[], citable: Citable[]): FundingEvent[]
       key,
       company,
       sector: field(1),
-      amount: field(2),
-      stage,
+      amount,
+      stage: field(3),
       investors: field(4),
       eventDate: field(5),
       sourceUrl,
@@ -423,16 +449,13 @@ export function recallQuery(topic: string, goals: string[], lastProgress: string
 
 export const REPORT_SYSTEM = `You are writing the daily delta report for a loop that tracks change against a baseline.
 
-Structure, in this order:
-
-## New events
-One bullet per funding event in the findings: company — sector, amount, stage, investors, date, and its URL. If the findings contain none, write exactly "None today." and nothing else in this section.
+The report's "## New events" section is generated for you from the event ledger and is NOT your job — do not write one, do not repeat it, and do not list any funding event. Write only the sections below.
 
 ## Divergence from baseline
 Only what the findings explicitly say contradicts the baseline. If the findings say nothing of the kind, write "None."
 
 ## Notes
-At most three lines for anything else a human should see. Omit the section entirely if there is nothing.
+At most three lines for anything else a human should see. Funding events are NOT "anything else" — they are handled above, so never mention one here, however notable. Omit the section entirely if there is nothing.
 
 Rules:
 - Build ONLY from the findings supplied. Add no context, background or interpretation of your own.
