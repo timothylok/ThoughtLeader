@@ -103,19 +103,24 @@ export async function recordFinding(
   n: number,
   sourceUrl: string | null,
   r: Reasoning,
+  /** Ledger companies this finding named despite being told not to (#37). */
+  leaked: string[],
 ): Promise<number> {
   const ts = now();
   // Idempotent: the enclosing step can fail after this INSERT and be retried.
   // Without the upsert, iteration 11 of run 19ac529b produced 6 finding rows.
   const row = await db
     .prepare(
-      `INSERT INTO findings (run_id, n, source_url, finding, progress, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+      `INSERT INTO findings (run_id, n, source_url, finding, progress, leaked, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
        ON CONFLICT(run_id, n) DO UPDATE SET
-         source_url = ?3, finding = ?4, progress = ?5
+         source_url = ?3, finding = ?4, progress = ?5, leaked = ?6
        RETURNING id`,
     )
-    .bind(runId, n, sourceUrl, r.finding, r.progress, ts)
+    // NULL when clean, so the rate is one query:
+    //   SELECT COUNT(*) FILTER (WHERE leaked IS NOT NULL), COUNT(*) FROM findings
+    .bind(runId, n, sourceUrl, r.finding, r.progress,
+          leaked.length ? JSON.stringify(leaked) : null, ts)
     .first<{ id: number }>();
 
   await db

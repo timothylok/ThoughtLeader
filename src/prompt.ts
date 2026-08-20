@@ -22,7 +22,8 @@ Rules:
 - SECTOR is what the company DOES — travel, fintech, agtech, biotech, robotics, space, mining tech. Never write "AI" or "tech" as the sector; every company here is one of those, so it says nothing. A company's NAME is not its sector: "Sophiie AI" is a voice-assistant company, not an "AI" one.
 - Events listed under ALREADY RECORDED are known. Leave them out of "events" AND out of the finding — do not mention them at all, not even to say they are already recorded. Naming them again puts them back into memory for later iterations to recall and restate.
 - NOTHING NEW IS A VALID RESULT. If the material contains no unrecorded event, return "events": [] and a one-line finding saying so. Do NOT restate recalled material to fill the space — a finding that repeats what is already known is worse than a short one.
-- If a BASELINE is given and the material contradicts it — a sector it does not list, an investor it does not rank, a round outside its stated range — say so in the finding, with the marker.
+- If a BASELINE is given and the material contradicts it, say so in the finding, with the marker — but ONLY about SECTOR, and only where the company's sector maps onto NO row of the baseline's taxonomy. A sector that maps onto a row under a different name is not a divergence.
+- NEVER judge round size against the baseline: code does that from the baseline's own table, and a round with no stage stated cannot be judged at all. NEVER flag an investor: the baseline ranks none, so an unfamiliar investor is evidence of nothing.
 - Keep the finding under 200 words.
 
 Respond with ONLY a JSON object, no prose or code fences:
@@ -183,15 +184,25 @@ const normKey = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, ''
  *
  * Scale words and currency prefixes are noise for identity; the number is not.
  */
-function normAmount(raw: string | null): string {
-  if (!raw) return '';
+export function parseAmount(raw: string | null): number | null {
+  if (!raw) return null;
   const m = raw.replace(/,/g, '').match(/([\d.]+)\s*(b|bn|billion|m|mn|million|k|thousand)?/i);
-  if (!m) return '';
+  if (!m) return null;
   const n = Number(m[1]);
-  if (!Number.isFinite(n)) return '';
+  if (!Number.isFinite(n)) return null;
   const scale = (m[2] ?? '').toLowerCase();
   const mult = scale.startsWith('b') ? 1e9 : scale.startsWith('m') ? 1e6 : scale.startsWith('k') || scale.startsWith('t') ? 1e3 : 1;
-  return String(Math.round(n * mult));
+  return Math.round(n * mult);
+}
+
+/**
+ * The dedupe key's half of the same parse. The B3 check and the ledger key MUST
+ * read an amount identically — canonicalisation applied to one side of a
+ * comparison is not canonicalisation (CLAUDE.md §9, bugs.md #14).
+ */
+function normAmount(raw: string | null): string {
+  const v = parseAmount(raw);
+  return v === null ? '' : String(v);
 }
 
 /**
@@ -471,11 +482,12 @@ export const REPORT_SYSTEM = `You are writing the daily delta report for a loop 
 
 The report's "## New events" section is generated for you from the event ledger and is NOT your job — do not write one, do not repeat it, and do not list any funding event. Write only the sections below.
 
+The "## Round size vs baseline (B3)" section is ALSO generated for you, by code, from the baseline's own flag table. Never state whether a round is inside or outside a baseline range, never name a stage the material did not state, and never write that section. Round size is answered; your divergence section is for SECTORS and nothing else.
+
 ## Divergence from baseline
 Only what the findings explicitly say contradicts the baseline. If the findings say nothing of the kind, write "None."
 
-## Notes
-At most three lines for anything else a human should see. Funding events are NOT "anything else" — they are handled above, so never mention one here, however notable. Omit the section entirely if there is nothing.
+Write NOTHING after the section above — no notes, no summary, no context, no closing line. Every report that has had such a section used it to restate an event the ledger already recorded, once directly contradicting its own "None today." (bugs.md #37). If the section above is empty, a one-line report is the correct report.
 
 Rules:
 - Build ONLY from the findings supplied. Add no context, background or interpretation of your own.
@@ -495,3 +507,192 @@ Rules:
 export const NO_BASELINE_RULE = `
 
 There is no baseline recorded. OMIT the "## Divergence from baseline" section entirely — it is written for you.`;
+
+// ---------------------------------------------------------------------------
+// B3 — round size against the baseline's flag table.
+//
+// Run ab39eff8 got this wrong in both directions in one report (bugs.md #36):
+// it called a $20M Seed "within the expected range" when B3 flags Seed above
+// $12.0M, and it checked a stageless round as a Seed when B3 says in words that
+// an unstaged round cannot be checked. Both are arithmetic against a fixed
+// table, and arithmetic delegated to prose is the same category error #28 fixed
+// for the New events list. The model is handed the answer.
+// ---------------------------------------------------------------------------
+
+export interface B3Band {
+  stage: string;
+  below: number;
+  above: number;
+  /** The baseline's own text, so the report never reformats a bound. */
+  belowRaw: string;
+  aboveRaw: string;
+}
+
+/**
+ * Read the "flag below / flag above" table out of the baseline document.
+ *
+ * Parsed, not copied. The bounds are CONSTRUCTED — the baseline states them as
+ * ⅓× to 3× the Q2 median — so they are recomputed whenever the baseline is
+ * refreshed, and a second copy in code would drift silently against the
+ * document every reader is told is authoritative.
+ *
+ * Anchored on the header cells, because B3 has a SECOND table directly above
+ * this one (the medians themselves) with the same column count.
+ */
+export function parseB3Bands(baseline: string | null): B3Band[] {
+  if (!baseline) return [];
+  const lines = baseline.split('\n');
+  const start = lines.findIndex(
+    (l) => /^\s*\|/.test(l) && /flag\s+below/i.test(l) && /flag\s+above/i.test(l),
+  );
+  if (start < 0) return [];
+
+  const out: B3Band[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (!/^\s*\|/.test(line)) break; // the table ended
+    const cells = line.split('|').slice(1, -1).map((c) => c.trim());
+    if (cells.length < 3) continue;
+    if (/^[-: ]+$/.test(cells[0]!)) continue; // |---|---|---|
+    const below = parseAmount(cells[1]!);
+    const above = parseAmount(cells[2]!);
+    if (below === null || above === null) continue;
+    out.push({ stage: cells[0]!, below, above, belowRaw: cells[1]!, aboveRaw: cells[2]! });
+  }
+  return out;
+}
+
+/** `Angel / Pre-Seed` -> ['angel', 'preseed']; `Series B+` -> ['seriesb']. */
+const stageAlts = (label: string): string[] =>
+  label.split('/').map((p) => normKey(p.replace(/\+/g, ''))).filter(Boolean);
+
+/**
+ * Map a free-text stage onto a band, or null if it maps onto none.
+ *
+ * Longest alternative wins: `preseed` contains `seed`, so a Pre-Seed round
+ * would otherwise be checked against the Seed bounds.
+ */
+function bandFor(stage: string, bands: B3Band[]): B3Band | null {
+  const s = normKey(stage);
+  if (!s) return null;
+
+  let best: { band: B3Band; len: number } | null = null;
+  for (const band of bands) {
+    for (const alt of stageAlts(band.stage)) {
+      if (s.includes(alt) && (!best || alt.length > best.len)) best = { band, len: alt.length };
+    }
+  }
+  if (best) return best.band;
+
+  // "Series B+" means B and every letter after it — the only band whose label
+  // stands for more stages than it names.
+  const letter = s.match(/^series([a-z])$/);
+  if (letter) {
+    for (const band of bands) {
+      const b = band.stage.trim().match(/^series\s*([a-z])\s*\+$/i);
+      if (b && letter[1]! >= b[1]!.toLowerCase()) return band;
+    }
+  }
+  return null;
+}
+
+export type B3Status = 'above' | 'below' | 'within' | 'no-amount' | 'no-stage' | 'unmapped-stage';
+
+export interface B3Verdict {
+  company: string;
+  amount: string | null;
+  stage: string | null;
+  status: B3Status;
+  band: B3Band | null;
+}
+
+/** One verdict per event. Nothing is skipped — "not checkable" is a result. */
+export function checkRoundSizes(
+  events: { company: string; amount: string | null; stage: string | null }[],
+  bands: B3Band[],
+): B3Verdict[] {
+  return events.map((e) => {
+    const base = { company: e.company, amount: e.amount, stage: e.stage };
+    const value = parseAmount(e.amount);
+    if (value === null) return { ...base, status: 'no-amount' as const, band: null };
+    // B3, verbatim: "A round with no stage stated cannot be checked against
+    // this table. Say the stage was absent rather than assuming one."
+    if (!e.stage) return { ...base, status: 'no-stage' as const, band: null };
+    const band = bandFor(e.stage, bands);
+    if (!band) return { ...base, status: 'unmapped-stage' as const, band: null };
+    const status: B3Status = value > band.above ? 'above' : value < band.below ? 'below' : 'within';
+    return { ...base, status, band };
+  });
+}
+
+export const B3_HEADING = 'Round size vs baseline (B3)';
+
+/**
+ * Companies the finding names that the prompt had already listed as recorded.
+ *
+ * Not a filter — a MEASUREMENT. The prompt says of the ALREADY RECORDED list:
+ * "do not mention them at all, not even to say they are already recorded",
+ * because restating one puts it back into this run's memory for later
+ * iterations to recall and re-report. Whether that rule holds has never been a
+ * number, and the fix for a rule that does not hold cannot be designed from
+ * three anecdotes (CLAUDE.md §12). So the violation is counted, not corrected:
+ * the finding is the run's work product and an offending sentence can carry a
+ * genuinely new event alongside the leaked one, as iteration 1 of ab39eff8 did.
+ *
+ * Matched on a word boundary in the ORIGINAL text, never on a squashed key:
+ * `normKey` would find "nybro" inside "a\ny bro''chure".
+ */
+export function leakedCompanies(finding: string, known: string[]): string[] {
+  if (!finding) return [];
+  const out: string[] = [];
+  for (const company of known) {
+    const tokens = company.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) continue;
+    // Two characters is a word, not a name; "AI" would match every finding.
+    if (company.replace(/[^A-Za-z0-9]/g, '').length < 3) continue;
+    const pattern = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+');
+    if (new RegExp('\\b' + pattern, 'i').test(finding) && !out.includes(company)) {
+      out.push(company);
+    }
+  }
+  return out;
+}
+
+/**
+ * Render the section the CODE owns.
+ *
+ * An unreadable table prints NOT CHECKED, never an empty list: "nothing
+ * breached" and "nothing was compared" are different results and printing them
+ * the same is exactly bug #30 (CLAUDE.md §10).
+ */
+export function renderB3Section(
+  verdicts: B3Verdict[],
+  bands: B3Band[],
+  hasBaseline: boolean,
+): string {
+  const head = `## ${B3_HEADING}`;
+  if (!hasBaseline) return `${head}\nNot measured — no baseline recorded.`;
+  if (bands.length === 0) {
+    return `${head}\nNOT CHECKED — the baseline has no readable "flag below / flag above" table.`;
+  }
+  if (verdicts.length === 0) return `${head}\nNo new events to check.`;
+
+  const line = (v: B3Verdict): string => {
+    const who = `* ${v.company} — ${v.amount ?? 'amount not stated'}`;
+    switch (v.status) {
+      case 'above':
+        return `${who} (${v.stage}): **ABOVE** the ${v.band!.aboveRaw} flag for ${v.band!.stage}.`;
+      case 'below':
+        return `${who} (${v.stage}): **BELOW** the ${v.band!.belowRaw} flag for ${v.band!.stage}.`;
+      case 'within':
+        return `${who} (${v.stage}): within ${v.band!.belowRaw}–${v.band!.aboveRaw} for ${v.band!.stage}.`;
+      case 'no-stage':
+        return `${who}: stage not stated, so not checked.`;
+      case 'unmapped-stage':
+        return `${who}: stage "${v.stage}" is not a B3 row, so not checked.`;
+      case 'no-amount':
+        return `${who}: not checked.`;
+    }
+  };
+  return `${head}\n${verdicts.map(line).join('\n')}`;
+}

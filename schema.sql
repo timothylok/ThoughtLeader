@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS findings (
   source_url TEXT,
   finding    TEXT NOT NULL,
   progress   TEXT,                       -- model's self-assessment
+  -- JSON array of ledger companies this finding named despite the prompt
+  -- forbidding it, or NULL when clean. A measurement, not a guard: see
+  -- bugs.md #37. Added to a live table with
+  --   ALTER TABLE findings ADD COLUMN leaked TEXT;
+  leaked     TEXT,
   created_at INTEGER NOT NULL
 );
 
@@ -79,7 +84,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_unique ON findings (run_id, n);
 -- UNIQUE constraint is the right one.
 CREATE TABLE IF NOT EXISTS events (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  key        TEXT NOT NULL,        -- normalised company + stage
+  key        TEXT NOT NULL,        -- normalised company + amount; see eventKey() for why NOT stage (bugs.md #27)
   company    TEXT NOT NULL,
   sector     TEXT,
   amount     TEXT,

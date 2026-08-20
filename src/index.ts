@@ -10,6 +10,7 @@ import {
   citableSources,
   resolveCitations,
   parseEvents,
+  leakedCompanies,
 } from './prompt.ts';
 import { alert } from './notify.ts';
 import {
@@ -629,7 +630,11 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
   const cited = resolveCitations(parsed.finding, citable);
   const reasoning = { ...parsed, finding: cited.text };
   const parsedEvents = parseEvents(parsed.events, citable);
-  await recordFinding(env.DB, runId, n, contributedUrl, reasoning);
+  // Same measurement as the workflow, from the same list and the same text.
+  // /step is the tool used to debug the prompt, so a rule counted on one path
+  // and not the other is a rule that is not counted (bugs.md #24, #37).
+  const leaked = leakedCompanies(cited.text, known.map((e) => e.company));
+  await recordFinding(env.DB, runId, n, contributedUrl, reasoning, leaked);
   // Same writer as the workflow. /step is a second writer to the ledger, so it
   // has to uphold the same dedupe — this is how #12 became #14.
   const newEvents = await recordEvents(env.DB, runId, n, parsedEvents);
@@ -665,6 +670,7 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
     citable,
     citationsDropped: cited.dropped,
     eventsParsed: parsedEvents,
+    leakedRecordedEvents: leaked,
     eventsInserted: newEvents,
     knownEventsShown: known.length,
     baselinePresent: Boolean(baseline && baseline.trim()),

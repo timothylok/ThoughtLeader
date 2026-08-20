@@ -17,7 +17,15 @@ import {
   eventKey,
   dropSection,
   buildPrompt,
+  parseAmount,
+  parseB3Bands,
+  checkRoundSizes,
+  renderB3Section,
+  B3_HEADING,
+  leakedCompanies,
+  REPORT_SYSTEM,
 } from '../src/prompt.ts';
+import { readFileSync } from 'node:fs';
 
 let pass = 0;
 let fail = 0;
@@ -158,6 +166,119 @@ eq('baseline: whitespace-only is treated as absent',
   userMsg('   \n  ').includes('skip divergence flagging'), true);
 eq('baseline: null is treated as absent',
   userMsg(null).includes('skip divergence flagging'), true);
+
+// ---------------------------------------------------------------------------
+// B3 — round size against the baseline's flag table (bugs.md #36).
+//
+// Read from the REAL baseline document, not a fixture: the bounds are
+// CONSTRUCTED and get recomputed on every baseline refresh, so these tests are
+// also the guard that a refresh has not broken the table the code parses.
+// ---------------------------------------------------------------------------
+const BASELINE = readFileSync(
+  new URL('../baseline/AU-AI-FUNDING-2026H1.md', import.meta.url),
+  'utf-8',
+);
+const BANDS = parseB3Bands(BASELINE);
+const seedBand = BANDS.find((b) => b.stage.toLowerCase() === 'seed');
+const statuses = (rows) => checkRoundSizes(rows, BANDS).map((v) => v.status);
+
+eq('b3: the live baseline yields four bands', BANDS.length, 4);
+eq('b3: it reads the FLAG table, not the median table above it',
+  [seedBand.below, seedBand.above], [1300000, 12000000]);
+eq('b3: the bounds keep the baseline own text, so nothing is reformatted',
+  [seedBand.belowRaw, seedBand.aboveRaw], ['$1.3M', '$12.0M']);
+eq('b3: no baseline yields no bands', parseB3Bands(null).length, 0);
+eq('b3: a baseline without the table yields no bands',
+  parseB3Bands('## B3\n| stage | CY2025 |\n|---|---|\n| Seed | $2.5M |').length, 0);
+
+// The two verdicts run ab39eff8 got wrong, as the ledger actually holds them.
+eq('b3: THE MISS — $20m Seed is ABOVE the $12.0M flag, not "within range"',
+  statuses([{ company: 'Nybro', amount: '$20 million', stage: 'Seed' }]), ['above']);
+eq('b3: THE ASSUMPTION — a stageless round is not checked, not treated as Seed',
+  statuses([{ company: 'Seitec', amount: '$4 million', stage: null }]), ['no-stage']);
+
+eq('b3: a genuinely in-range Seed is within',
+  statuses([{ company: 'Sophiie AI', amount: '$5 million', stage: 'Seed' }]), ['within']);
+eq('b3: under the floor is flagged too',
+  statuses([{ company: 'X', amount: '$0.9m', stage: 'Seed' }]), ['below']);
+eq('b3: the bounds are exclusive — exactly on the flag is within',
+  statuses([{ company: 'X', amount: '$12m', stage: 'Seed' }]), ['within']);
+eq('b3: pre-seed does NOT fall through to the Seed band',
+  checkRoundSizes([{ company: 'X', amount: '$2 million', stage: 'Pre-Seed' }], BANDS)[0].band.stage,
+  'Angel / Pre-Seed');
+eq('b3: $5m Pre-Seed is ABOVE its own $3.9M flag though inside Seed range',
+  statuses([{ company: 'X', amount: '$5 million', stage: 'Pre-Seed' }]), ['above']);
+eq('b3: Series C maps onto Series B+',
+  checkRoundSizes([{ company: 'X', amount: '$50m', stage: 'Series C' }], BANDS)[0].band.stage,
+  'Series B+');
+eq('b3: an unparseable amount is not checked, not zero',
+  statuses([{ company: 'X', amount: 'an undisclosed sum', stage: 'Seed' }]), ['no-amount']);
+eq('b3: a stage that is no B3 row is not checked',
+  statuses([{ company: 'X', amount: '$3m', stage: 'Growth' }]), ['unmapped-stage']);
+
+eq('b3: an unreadable table prints NOT CHECKED, never an empty clean list',
+  renderB3Section([], [], true).includes('NOT CHECKED'), true);
+eq('b3: no baseline prints "not measured", not "none"',
+  renderB3Section([], [], false).includes('Not measured'), true);
+eq('b3: no events to check is not the same sentence as nothing breached',
+  renderB3Section([], BANDS, true).includes('No new events to check'), true);
+eq('b3: the breach line quotes the baseline own bound',
+  renderB3Section(
+    checkRoundSizes([{ company: 'Nybro', amount: '$20 million', stage: 'Seed' }], BANDS),
+    BANDS, true).includes('ABOVE** the $12.0M flag for Seed'), true);
+eq('b3: a model-written B3 section is removed whatever it said',
+  dropSection('## ' + B3_HEADING + '\nAll rounds look fine.\n\n## Notes\nkept', B3_HEADING),
+  '## Notes\nkept');
+
+eq('amount: the ledger key and the B3 check parse identically',
+  [parseAmount('$20 million'), parseAmount('A$1.75m'), parseAmount('$123M'), parseAmount(null)],
+  [20000000, 1750000, 123000000, null]);
+eq('amount: an unparseable amount is null, NOT 0 (CLAUDE.md §10)',
+  parseAmount('an undisclosed sum'), null);
+
+// ---------------------------------------------------------------------------
+// #37 — the deliverable must never name an already-recorded event.
+//
+// Two halves: the Notes section is gone structurally, and the finding-level
+// leak is COUNTED rather than corrected, because the rate has never been a
+// number and a fix cannot be designed from three anecdotes.
+// ---------------------------------------------------------------------------
+const LEDGER = ['Nybro', 'Sophiie AI', 'Space Angel', 'Visaible.ai', 'Seitec'];
+
+// The real sentence from iteration 1 of run ab39eff8, trimmed.
+const REAL_LEAK =
+  'Seitec, a defence tech startup, has raised $4 million, and Nybro, a biotech ' +
+  'company, has doubled its Seed round to $20 million, but the baseline already ' +
+  'recorded Nybro so only Seitec is new.';
+
+eq('leak: the real ab39eff8 finding is caught, both companies named',
+  leakedCompanies(REAL_LEAK, LEDGER), ['Nybro', 'Seitec']);
+eq('leak: a company never mentioned is not reported',
+  leakedCompanies('Nothing new in this feed today.', LEDGER), []);
+eq('leak: a possessive still counts',
+  leakedCompanies("Nybro's round was already recorded.", LEDGER), ['Nybro']);
+eq('leak: matching is case-insensitive',
+  leakedCompanies('nybro raised again', LEDGER), ['Nybro']);
+eq('leak: a multi-word name survives odd whitespace',
+  leakedCompanies('Space   Angel took a grant.', LEDGER), ['Space Angel']);
+eq('leak: WORD BOUNDARY — "any brochure" does not contain Nybro',
+  leakedCompanies('We read any brochure we could find.', LEDGER), []);
+eq('leak: a dot in a name is literal, not a regex wildcard',
+  leakedCompanies('VisaibleXai is a different company.', LEDGER), []);
+eq('leak: the same company twice is reported once',
+  leakedCompanies('Nybro and Nybro again.', LEDGER), ['Nybro']);
+eq('leak: a two-letter name is skipped — "AI" would match every finding',
+  leakedCompanies('An AI company raised money.', ['AI', 'Nybro']), []);
+eq('leak: an empty finding leaks nothing',
+  leakedCompanies('', LEDGER), []);
+
+eq('notes: the report prompt no longer asks for a Notes section',
+  REPORT_SYSTEM.includes('## Notes'), false);
+eq('notes: and it says explicitly to write nothing after',
+  REPORT_SYSTEM.includes('Write NOTHING after the section above'), true);
+eq('notes: a Notes section the model writes anyway is removed',
+  dropSection('## Divergence from baseline\nNone.\n\n## Notes\nNybro raised $20m.', 'Notes'),
+  '## Divergence from baseline\nNone.');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

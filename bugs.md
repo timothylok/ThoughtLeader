@@ -39,6 +39,10 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [31](#bug-31--the-daily-run-was-scheduled-to-drift-an-hour-in-six-weeks) | The daily run was scheduled to drift an hour in six weeks | 🟡 Latent schedule drift | ✅ **Fixed & simulated** (`3602f68b`) |
 | [32](#bug-32--a-locale-decoded-pipe-reported-clean-utf-8-as-corrupt) | A locale-decoded pipe reported clean UTF-8 as corrupt | 🟠 False diagnosis | Diagnosed; practice added |
 | [33](#bug-33--every-write-endpoint-was-open-to-anyone-holding-the-url) | Every write endpoint was open to anyone holding the URL | 🔴 Unauthenticated spend | ✅ **Fixed & verified** (`79b9bd95`) |
+| [34](#bug-34--a-sector-that-maps-onto-the-taxonomy-was-reported-as-a-divergence) | A sector that maps onto the taxonomy was reported as a divergence | 🟠 False positive | **Open** (fix gated on 2 more runs) |
+| [35](#bug-35--the-replacement-seed-cannot-produce-a-ledger-row-either) | The replacement seed cannot produce a ledger row either | 🟡 Wasted iteration | ✅ **Fixed 2026-08-21** (brief change) |
+| [36](#bug-36--the-b3-round-size-rule-was-applied-in-both-wrong-directions-at-once) | The B3 round-size rule was applied in both wrong directions at once | 🔴 False compliance | ✅ **Fixed 2026-08-21** (computed in code) |
+| [37](#bug-37--the-report-discussed-a-recorded-event-and-called-the-ledger-the-baseline) | The report discussed a recorded event, and called the ledger "the baseline" | 🟠 Wrong attribution | ✅ **Fixed 2026-08-21** (section deleted; leak rate measured at 50%) |
 
 ---
 
@@ -1834,3 +1838,232 @@ run was started.
 and an absent token denies.* Crons sit outside it by construction — they enter through
 `scheduled()`, not `fetch()` — and no source file reads `WORKER_URL`, so the Worker never
 calls itself.
+
+---
+
+## Bug 34 — A sector that maps onto the taxonomy was reported as a divergence
+
+**Found:** 2026-08-21, reading daily run `ab39eff8` — the first run with a baseline to
+diverge *from*. **Severity:** 🟠 False positive in the deliverable · **Status:** **Open**
+(logged, fix gated on evidence — see "What would justify the fix")
+
+The report's only divergence claim:
+
+> Seitec's sector, defence tech, is not explicitly listed in the baseline's sector
+> distribution, although it can be mapped to the 'Space & defence' sector.
+
+Both halves fail against the baseline's own rule. B4 makes reportable *"a funded company
+whose sector **does not map onto** any row below"* — and the sentence states that it does
+map. Nor is the premise true: `Space & defence` is a literal row of B1 (`$293M`, 8.4%), so
+"not explicitly listed in the sector distribution" is false on a plain read. B4's second
+trigger — a run of rounds in a sector under 5% H1 share — does not fire either, at 8.4%.
+
+**What the model actually did was a string comparison.** `"defence tech" != "space &
+defence"`, therefore absent. It then hedged correctly in the same sentence, and
+`REPORT_SYSTEM` promoted the hedge into a divergence entry — its rule is *"only what the
+findings explicitly say contradicts the baseline"*, and it has no way to notice that a
+finding contradicts itself.
+
+**This failure mode was pre-registered.** HANDOFF, the day before: *"The risk is
+over-flagging, not under-flagging… if the divergence section is long and mostly about
+sector labels, the fix is a mapping step in code, not a stricter prompt."* It named
+Visaible.ai's "travel" as the case to watch. A different one arrived first.
+
+### What would justify the fix, and why it is not justified yet
+
+The pre-registered trigger was **"long and mostly about sector labels"**. The section was
+**one line**. On n=1 that is §11 verbatim — an event, not a property — and building the
+taxonomy map now would be designing off a single observation.
+
+The decision rule, set *before* the data rather than after it:
+
+> **Two further runs producing a sector-label divergence that B4's "does not map" test
+> would reject ⇒ build the mapping step in code.** Fewer than that ⇒ it was noise.
+
+When it is built, it is a map and not a prompt — B1's taxonomy is a fixed 13-item list
+already in the baseline, and prompting has now failed on this class of behaviour in #25,
+#28 and here. The cheap half is available independently: the divergence section is
+assembled from findings, and a finding that says *"maps to X"* about a sector it also
+calls absent is machine-detectable without any taxonomy at all.
+
+**What is NOT the fix:** telling the model to read B4 more carefully. It read B4
+correctly enough to name the mapping.
+
+---
+
+## Bug 35 — The replacement seed cannot produce a ledger row either
+
+**Found:** 2026-08-21, auditing which sources have ever contributed an event.
+**Severity:** 🟡 Wasted iteration · **Status:** ✅ **Fixed 2026-08-21** — dropped from
+`control.daily_brief`, no deploy
+
+#29 removed `smartcompany.com.au/feed` for carrying no funding events and swapped in
+`smartcompany.com.au/startupsmart/feed/`. The candidate table **in that same bug entry**
+records why the replacement cannot work:
+
+> `startupsmart/feed` — ✅ on-topic; roundups name companies but **amounts are behind the
+> link**
+
+and the same bug's other half made an event without an amount unrecordable. The two rules
+cancel: the feed's items are structurally incapable of becoming a row. Confirmed in
+production on both runs it was seeded into — `ab39eff8` iteration 3 read *"Eight ANZ
+startups raised a total of $67.4 million this week"* and correctly recorded nothing, and
+`35e0c08b` before it. **0 events from 2 runs, and the mechanism was written down before
+either.**
+
+**This is §9.** #29 closed the incident — *that* feed was off-topic — and left the
+invariant open: **every seed must be able to produce a ledger row under the recording rule
+in force.** The replacement was chosen against relevance (§5's second validation, which
+#29 was itself about) and never against recordability, which is a third one.
+
+Cost of leaving it: one iteration a day, ~320 neurons, on a source that cannot contribute.
+
+**Also true of `techcouncil.com.au/feed`** — 0 of 5 ledger rows, ever — but that is an
+empirical result about a policy feed, not an entailment, and it is left seeded pending a
+decision. Every ledger row to date comes from `startupdaily.net/feed`.
+
+---
+
+## Bug 36 — The B3 round-size rule was applied in both wrong directions at once
+
+**Found:** 2026-08-21, checking daily run `ab39eff8` against the baseline by hand.
+**Severity:** 🔴 False statement of compliance in the deliverable · **Status:** ✅ **Fixed
+2026-08-21** — computed in code, 22 tests, deploy pending
+
+B3 is a table of bounds and a rule in words. One run broke it three ways:
+
+| what the run said | what B3 says |
+|---|---|
+| Nybro's $20M Seed is *"within the expected range for a Seed round according to the baseline [B3]"* | Seed flags **above $12.0M**. A 1.7× breach — cited to the rule it breaches |
+| Seitec's $4M *"is within the expected range for a Seed round [B3]"* | Seitec's `stage` is **null**, and B3: *"A round with no stage stated cannot be checked against this table. Say the stage was absent rather than assuming one"* |
+| the investor line could not be resolved *"[B2]"* | B2: *"**Do not flag investor divergence.** An unfamiliar investor is not evidence of anything while this section is empty"* |
+
+**A false negative is worse here than silence.** "None." means nobody looked. *"Within the
+expected range according to [B3]"* means somebody looked and cleared it. The report
+asserted compliance for the single largest divergence in the ledger.
+
+**This is #28's category error, not a prompting miss.** Round size is arithmetic against a
+fixed table over two fields the ledger already stores. #28 moved `## New events` out of the
+model's prose for exactly this reason and the reasoning has not changed since: *the model
+formats nothing here and decides nothing; it is handed the answer.*
+
+**Fixed** with `parseB3Bands` / `checkRoundSizes` / `renderB3Section` and a code-owned
+`## Round size vs baseline (B3)` section, on **both** report paths — the no-findings early
+return included, because a guarantee enforced on one branch is not enforced (§9).
+
+- **The bounds are parsed from the baseline, not copied into code.** They are CONSTRUCTED
+  (⅓× to 3× the Q2 median) and get recomputed on every baseline refresh; a second copy
+  would drift silently against the document readers are told is authoritative. The parser
+  anchors on the *"flag below / flag above"* header because B3 has a second table with the
+  same column count directly above it. The tests read the **real** baseline file, so a
+  refresh that breaks the format fails `npm test` rather than the next daily run.
+- **`parseAmount` is now shared with `eventKey`.** Two parses of one number is #14 —
+  canonicalisation applied to one side of a comparison is not canonicalisation.
+- **Every non-verdict is a named result**, never a blank: `no-stage`, `no-amount`,
+  `unmapped-stage`, and `NOT CHECKED` when the table cannot be read (§10, #30). An
+  unreadable table also logs an error naming the reason.
+- **`Pre-Seed` no longer falls through to `Seed`** — longest label alternative wins, and
+  `preseed` contains `seed`. Proved by a $5M Pre-Seed, which is above its own $3.9M flag
+  and inside Seed's range, so the two bands give opposite verdicts.
+
+Rendered against the real ledger, the section now reads:
+
+```
+## Round size vs baseline (B3)
+* Seitec — $4 million: stage not stated, so not checked.
+* Nybro — $20 million (Seed): **ABOVE** the $12.0M flag for Seed.
+* Sophiie AI — $5 million (Seed): within $1.3M–$12.0M for Seed.
+```
+
+**What is NOT closed.** The model still writes the `## Divergence from baseline` prose, and
+a sentence inside a section cannot be stripped the way a whole section can. Both prompts
+now forbid it from judging round size or investors at all, and `dropSection` guarantees it
+cannot own the B3 heading — but a stray round-size claim in the divergence paragraph is
+still possible. It would now contradict a correct section printed directly above it, which
+is visible, rather than being the only statement on the subject.
+
+---
+
+## Bug 37 — The report discussed a recorded event, and called the ledger "the baseline"
+
+**Found:** 2026-08-21, same run. **Severity:** 🟠 Wrong attribution + memory feedback ·
+**Status:** ✅ **Fixed 2026-08-21** — section deleted, finding-level leak measured, deploy pending
+
+`## Notes` on run `ab39eff8`:
+
+> Only one new funding event was recorded: Seitec's $4 million funding.
+> The baseline already recorded Nybro's funding, so it is not a new event.
+
+Three rules broken and one plain error of fact:
+
+- `REPORT_SYSTEM`: *"Funding events are NOT 'anything else' — they are handled above, so
+  never mention one here, however notable."* Both lines are about funding events.
+- The reasoning prompt: *"Leave them out of 'events' AND out of the finding — do not
+  mention them at all, not even to say they are already recorded."* Iteration 1's finding
+  discussed Nybro at length, which is where the report got it.
+- **`grep -ci nybro baseline/AU-AI-FUNDING-2026H1.md` → 0.** Nybro is in the **ledger**,
+  from run `35e0c08b`. The report attributes ledger content to the baseline, so a reader
+  concludes the baseline contains an event it has never held.
+
+**This is #28's invariant one branch away** (§9). #28 closed the `## New events` branch of
+*"an already-recorded event never appears in the deliverable"* by rendering it from code.
+`## Notes` was left to prose and leaks the same events through it.
+
+The prompt rule exists for a reason beyond tidiness: restating a known event puts it back
+into Vectorize for later iterations to recall and re-report. The leak is upstream in the
+finding, so the report is where it is *visible*, not where it starts.
+
+### The section is deleted, because the evidence said so
+
+Every `## Notes` ever written under the delta brief — three of them — broke a rule, and
+none carried anything the other sections did not:
+
+| run | what Notes said | the violation |
+|---|---|---|
+| `35e0c08b` | *"No new funding events were found in sources X and Y"* | restates `New events: None today.`, and it is about funding events |
+| `dd207e98` | *"Nybro's Seed round has been doubled to $20 million, supported by QIC… This is a notable increase in funding."* | re-reports a recorded event as news, plus interpretation |
+| `ab39eff8` | Seitec restated; *"the baseline already recorded Nybro"* | three, including the ledger→baseline misattribution |
+
+`dd207e98` is the whole argument in 280 characters — `## New events: None today.` and then
+Notes announcing a $20M round. **A report contradicting itself, in the section with no
+source behind it.** Nybro entered the ledger at 04:01 that morning; that run was 09:58.
+
+So the section is gone: removed from `REPORT_SYSTEM`, and `dropSection(prose, 'Notes')`
+guarantees it whatever the model emits — instruction alone has lost here in #25, #28, #36
+and now this. The three older, pre-ledger runs never produced a Notes section at all, so
+nothing observed is lost.
+
+### The finding-level leak is COUNTED, not corrected — and it is 50%
+
+The leak starts upstream: the report only repeated what iteration 1 wrote. But the
+offending sentence carried a genuinely new event *alongside* the leaked one, so dropping
+the finding loses real work and editing it mid-sentence risks mangling prose. Designing
+that fix from three anecdotes is what §12 warns against, so the violation is measured
+first: `leakedCompanies()` compares the stored finding against the ALREADY RECORDED list
+that prompt actually carried, on **both** writers — the workflow and `/step` (#24, §9).
+
+Run against every delta-brief finding in D1:
+
+```
+35e0c08b n=2  LEAK: Sophiie AI, Visaible.ai
+afaad718 n=1  LEAK: Nybro
+dd207e98 n=1  LEAK: Nybro
+ab39eff8 n=1  LEAK: Nybro
+```
+
+**4 of the 8 findings handed a non-empty list named something on it — 50%, across four
+separate runs on three different days.** That is replication, not one bad afternoon
+(§11). Two of the four reached a report; one run was stopped before it wrote one; and
+`35e0c08b` n=2 stayed in the finding — which session 8 recorded as a *success*, because
+the events did stay out of the report. It was both: the ledger held, and the prompt rule
+did not.
+
+`findings.leaked` stores the JSON array, NULL when clean, so the rate is one query. **The
+four historical rows were backfilled** — without that, NULL would have meant both "clean"
+and "never measured", which is #21 exactly.
+
+The remaining question, now answerable rather than arguable: does deleting Notes drop the
+report-level leak to zero while the finding-level rate stays near 50%? If it does, the
+finding leak is cosmetic and within-run only (`recall()` is namespaced per run, so it
+cannot reach tomorrow). If a leak starts appearing in the divergence prose instead, the
+fix has to move upstream after all.

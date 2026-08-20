@@ -1,22 +1,45 @@
-# Session handoff — session 9, 2026-08-20
+# Session handoff — session 11, 2026-08-21
 
-## Where things stand — 2026-08-20 19:30 NZST
+## Where things stand — 2026-08-21 08:30 NZST
 
-**Live:** `$WORKER_URL` (see local `.env`) · version **`79b9bd95`** (2026-08-20 18:57 NZST,
-a Secret Change over the code in `c40fa659`) · `tsc --noEmit` clean · 40/40 tests pass ·
-repo, deployment and GitHub in sync at `b398f81` · **nothing in flight**.
+**Live:** `$WORKER_URL` (see local `.env`) · version **`a9b92f8e`** · `tsc --noEmit` clean ·
+**75/75 tests pass** · **nothing in flight**.
 
-**Crons:** `*/30 * * * *` watchdog · `0 15 * * *` **and** `0 16 * * *` daily run — both
-fire, only the arm that is 04:00 in `Pacific/Auckland` starts anything. Next run
-**2026-08-21 04:00 NZST**, on the `0 16` arm; the `0 15` arm takes over on 27 Sep.
+**Crons:** `*/30 * * * *` watchdog · `0 15` **and** `0 16` daily — the DST gate fired for
+real for the first time this morning, starting `ab39eff8` at **04:00:09 NZST** on the
+`0 16` arm. Next run 2026-08-22 04:00 NZST; the `0 15` arm takes over on 27 Sep.
 
-**Secrets:** `ALERT_WEBHOOK` → Discord · `CONTROL_TOKEN` → the write/spend routes. Both
-set; the token was verified from outside, including with the secret deliberately unset.
+**Sources: 2, not 3.** `startupsmart/feed` was dropped (bugs.md #35) — it names companies
+without amounts, and an event without an amount is unrecordable, so it cannot produce a
+ledger row. `techcouncil` is still seeded and has produced 0 of 5 ledger rows ever; every
+row to date comes from `startupdaily.net/feed`.
 
-**Baseline:** `baseline/AU-AI-FUNDING-2026H1.md` — 6,434 chars, `d18d6d14…`, byte-identical
-in D1. Read it back with an explicit UTF-8 decode, never through a locale-decoded pipe.
+**Ledger:** 5 events. **Spend:** 966 neurons on UTC 2026-08-20 against 10,000.
 
-**Ledger:** 4 events. **Spend:** 0 neurons on UTC 2026-08-20 against a 10,000 budget.
+**Schema changed:** `findings.leaked TEXT` was added to live D1 by hand
+(`ALTER TABLE findings ADD COLUMN leaked TEXT;`) **before** the deploy, because
+`recordFinding` now writes it. `schema.sql` carries the column and the ALTER in a comment.
+
+**Four bugs from one run's audit** — `ab39eff8`, the first run with a baseline to diverge
+from. Goal 1 was clean (2 of 2 events found, 8 of 8 non-events rejected, verified against
+the live feed). Goal 2 got all three of its baseline judgements wrong.
+
+- **#34** a sector that maps onto the taxonomy was reported as a divergence. **Open** —
+  the pre-registered trigger was "long and mostly about sector labels" and it was one
+  line, so the taxonomy map is gated on two more runs showing it.
+- **#35** the replacement seed cannot produce a ledger row. Fixed, brief change.
+- **#36** B3 applied in both wrong directions: a $20M Seed called "within the expected
+  range" when B3 flags above $12.0M, and a stageless round checked as a Seed when B3 says
+  in words it cannot be. Now computed in code from the baseline's own table — parsed, not
+  copied, because the bounds are constructed and get recomputed on every refresh.
+- **#37** `## Notes` deleted. All 3 ever written restated a recorded event; `dd207e98`
+  printed `New events: None today.` and then announced a $20M round. The finding-level
+  leak is measured, not corrected: **4 of 8 findings, 50%**, across four runs.
+
+**What tomorrow's run answers:** whether report-level leaks go to zero while the finding
+rate stays near 50% (cosmetic, within-run only — `recall()` is namespaced per run), or
+whether a leak surfaces in the divergence prose instead and the fix must move upstream.
+Also whether #34's sector false positive repeats.
 
 *Older "Where things stand" blocks below are the state of their own session, not this one.*
 

@@ -28,6 +28,11 @@ import {
   REPORT_SYSTEM,
   NO_BASELINE_RULE,
   dropSection,
+  leakedCompanies,
+  parseB3Bands,
+  checkRoundSizes,
+  renderB3Section,
+  B3_HEADING,
 } from './prompt.ts';
 import { alert } from './notify.ts';
 import {
@@ -207,7 +212,9 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
         const reasoning = await step.do(
           `reason:${n}`,
           { retries: { limit: 2, delay: '15 seconds', backoff: 'exponential' }, timeout: '2 minutes' },
-          async (): Promise<Reasoning & { neurons: number; parsedEvents: FundingEvent[] }> => {
+          async (): Promise<
+            Reasoning & { neurons: number; parsedEvents: FundingEvent[]; leaked: string[] }
+          > => {
             const prior = await recentFindings(env.DB, runId, PRIOR_FINDINGS_IN_PROMPT);
             // The ledger spans runs, so this is the only cross-day state the loop
             // has. Exact identity, not similarity — see schema.sql `events`.
@@ -267,13 +274,21 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
             // is resolved from the same table as the finding's citations, so a
             // ledger row cannot carry a URL the iteration was never offered.
             const parsedEvents = parseEvents(parsed.events, citable);
-            return { ...parsed, finding: cited.text, parsedEvents, neurons };
+            // Measured against the list this prompt actually carried, and on the
+            // text that is actually stored and embedded (bugs.md #37).
+            const leaked = leakedCompanies(cited.text, known.map((e) => e.company));
+            if (leaked.length) {
+              console.warn(`[${runId}] n=${n} finding names recorded events: ${leaked.join(', ')}`);
+            }
+            return { ...parsed, finding: cited.text, parsedEvents, leaked, neurons };
           },
         );
 
         // 5. Commit: finding to D1, finding to vector memory, new sources queued.
         const recorded = await step.do(`record:${n}`, async () => {
-          const findingId = await recordFinding(env.DB, runId, n, contributedUrl, reasoning);
+          const findingId = await recordFinding(
+            env.DB, runId, n, contributedUrl, reasoning, reasoning.leaked,
+          );
 
           // Idempotent by UNIQUE(key) + DO NOTHING, because this step retries and
           // Workflows re-runs everything in it (bugs.md #7). The count returned is
@@ -461,13 +476,28 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
         : 'None today.';
     const eventSection = `## New events\n${eventList}\n\n`;
 
+    // Round size is arithmetic against a fixed table, so the CODE does it and
+    // the model is handed the answer — the same call #28 made for New events.
+    // Run ab39eff8 called a $20M Seed "within the expected range" when B3 flags
+    // Seed above $12.0M, and checked a stageless round as a Seed when B3 says
+    // in words that it cannot be checked. Both were cited to B3 (bugs.md #36).
+    const bands = parseB3Bands(baseline);
+    if (hasBaseline && bands.length === 0) {
+      // Loud, never silent: the section prints NOT CHECKED and this says why.
+      console.error('[report] baseline has no readable B3 flag table - round size NOT checked');
+    }
+    const b3Section = renderB3Section(checkRoundSizes(added, bands), bands, hasBaseline);
+
     // Written HERE, not by the model, whenever there is no baseline: "None."
     // and "never measured" are different results and printed the same (§10).
     const noBaselineSection = '## Divergence from baseline\nNot measured — no baseline recorded.';
 
     if (findings.length === 0) {
       const divergence = hasBaseline ? '## Divergence from baseline\nNone.' : noBaselineSection;
-      return { report: eventSection + divergence, neurons: 0 };
+      // B3 belongs on THIS branch too: a guarantee enforced on one path is
+      // not enforced (CLAUDE.md §9), and a run with no findings still has
+      // events in the ledger to check.
+      return { report: `${eventSection}${b3Section}\n\n${divergence}`, neurons: 0 };
     }
 
     // No SOURCE line. Findings now carry their citations inline, per claim, so
@@ -505,10 +535,17 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
     // The model is ASKED to omit the section; that it actually did is not
     // assumed. Instruction has lost to this model on the report surface before
     // (#25, #28), so the code removes it and writes its own.
-    const modelHalf = hasBaseline ? swept : dropSection(swept, 'Divergence from baseline');
+    // The model is TOLD to omit both code-owned sections; that it did is not
+    // assumed. Instruction has lost on this surface before (#25, #28, #36).
+    // Every section the code owns is removed from the model's half, whatever
+    // it emitted. `Notes` is on the list not because the code writes one but
+    // because nothing should: 3 of 3 delta reports used it to restate a
+    // recorded event, one contradicting its own "None today." (bugs.md #37).
+    let prose = hasBaseline ? swept : dropSection(swept, 'Divergence from baseline');
+    for (const owned of [B3_HEADING, 'Notes']) prose = dropSection(prose, owned);
     const report = hasBaseline
-      ? eventSection + swept
-      : `${eventSection}${noBaselineSection}${modelHalf ? `\n\n${modelHalf}` : ''}`;
+      ? `${eventSection}${b3Section}\n\n${prose}`
+      : `${eventSection}${b3Section}\n\n${noBaselineSection}${prose ? `\n\n${prose}` : ''}`;
     return { report, neurons };
   }
 }
