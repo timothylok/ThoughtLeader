@@ -8,9 +8,11 @@ dist/
 # Local machine paths and personal permission grants
 .claude/settings.local.json
 
-# Files carrying the worker URL or Cloudflare account ID — kept local only
-README.md
-HANDOFF.md
+# Files carrying the worker URL or Cloudflare account ID — kept local only.
+# README.md and HANDOFF.md were sanitised to $WORKER_URL / $CF_ACCOUNT_ID
+# placeholders and are now tracked; scan for the literal .env values before
+# committing either of them again. The repo is PUBLIC and the Worker's write
+# endpoints are unauthenticated, so the URL itself is the thing to withhold.
 AI_Research.md
 benchmark/BENCHMARK.md
 liverun.html
