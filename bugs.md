@@ -30,7 +30,7 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [22](#bug-22--a-finding-is-attributed-to-a-source-that-returned-no-content) | A finding is attributed to a source that returned no content | 🔴 False attribution | ✅ **Fixed & verified** (`8ca445dd`) — and **confirmed in production** on daily run `5a8c9aeb` against the original incident |
 | [23](#bug-23--the-usage-ledger-has-no-model-column-so-the-reconciliation-rule-cannot-be-run) | The usage ledger has no model column, so the reconciliation rule cannot be run | 🟡 Guard observability | ✅ **Fixed & verified** (`764f7709`) — **confirmed in production**: exact per-model match on run `5a8c9aeb` |
 | [24](#bug-24--the-fresh-excerpt-window-is-a-newest-n-cut-and-it-destroyed-a-verdict) | The fresh-excerpt window is a newest-N cut, and it destroyed a verdict | 🔴 Silent research regression | ✅ **Fixed & measured** (0/8 → 3/3), deployed `15f2e432` |
-| [25](#bug-25--a-finding-is-attributed-to-a-source-that-supplied-none-of-its-content) | A finding is attributed to a source that supplied none of its content | 🔴 False attribution | **Open** — #22's invariant one branch away |
+| [25](#bug-25--a-finding-is-attributed-to-a-source-that-supplied-none-of-its-content) | A finding is attributed to a source that supplied none of its content | 🔴 False attribution | ✅ **Fixed & verified 2026-08-18** (`030dc506`) |
 | [26](#bug-26--eight-samples-of-a-config-experiment-that-tested-nothing) | Eight samples of a config experiment that tested nothing | 🟠 Test validity | Diagnosed; practice added |
 | [27](#bug-27--the-event-ledger-deduped-on-a-field-that-is-usually-absent) | The event ledger deduped on a field that is usually absent | 🟠 Data integrity | Fixed |
 | [28](#bug-28--the-report-announced-already-recorded-events-as-new) | The report announced already-recorded events as new | 🟠 False delta | Fixed |
@@ -356,7 +356,9 @@ rather than grounding being strictly better.
 
 ## Bug 13 — Report cites iteration numbers as if they were sources
 
-**Severity:** 🟠 Traceability · **Status:** **Open** (found in run `76fb1813`)
+**Severity:** 🟠 Traceability · **Status:** ✅ **Fixed & verified** (run `d2cd8b42`)
+— `REPORT_SYSTEM` carries *"never cite a bare [n] index"*. **Entry status corrected
+2026-08-21**: it had been left at its found-state while the index said fixed.
 
 **How it showed up.** The final report of run `76fb1813` cites claims as `[1]`,
 `[3]`, `[5]`, `[6]`, `[10]` — with no legend anywhere in the document. Run
@@ -401,7 +403,9 @@ produce an error. It produces a confident substitute.
 
 ## Bug 14 — URL variants bypass dedupe and are re-fetched
 
-**Severity:** 🟡 Quality/cost · **Status:** **Open** (found in run `76fb1813`)
+**Severity:** 🟡 Quality/cost · **Status:** ✅ **Fixed & verified** — seeds are
+canonicalised at `index.ts:402`, the side the original fix missed. **Entry status
+corrected 2026-08-21**: it had been left at its found-state while the index said fixed.
 
 **How it showed up.** Run `76fb1813` fetched the same pages twice under URLs
 differing only in punctuation:

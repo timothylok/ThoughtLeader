@@ -893,3 +893,89 @@ production, before anything depends on it not happening.
 - **Nearly shipped the DST gate on wall-clock hour**, which cannot be tested except at
   04:00. Keying it on the UTC offset instead made it testable at any hour, for both
   regimes, and that is the only reason the year-long simulation exists.
+
+---
+
+## 14. Addendum — session 11, 2026-08-21
+
+The first daily run with a baseline to diverge from, and it split cleanly: the half that
+records facts was perfect, and every judgement the model made against the baseline was
+wrong.
+
+**Goal 1 was clean, and provably so.** Pulling the Startup Daily feed afterwards — it held
+no item newer than the run, so it was the same window, not a proxy — gives 2 of 2 funding
+events found, 8 of 8 non-events rejected, the already-recorded one correctly excluded. No
+false positives, no false negatives. Second consecutive clean run on that goal.
+
+**Goal 2 got all three of its judgements wrong**, and the machinery worked perfectly the
+whole time. The baseline reached the model, it cited `[B1]` and `[B3]` markers, the section
+was populated for the first time instead of printing a hollow `None.` The plumbing improved
+and the deliverable did not.
+
+### Arithmetic delegated to prose
+
+B3 is a table of bounds and one sentence of rule. The model called a $20M Seed *"within the
+expected range for a Seed round according to the baseline [B3]"* — B3 flags Seed above
+$12.0M, so it is a 1.7× breach cited to the rule it breaches. It then checked a **stageless**
+round as a Seed, where B3 says in words: *"a round with no stage stated cannot be checked
+against this table. Say the stage was absent rather than assuming one."* And it reached for
+an investor comparison that B2 explicitly forbids.
+
+**A false negative that asserts compliance is worse than silence.** `None.` means nobody
+looked. *"Within the expected range according to [B3]"* means somebody looked and cleared
+it, over the largest divergence in the ledger.
+
+The fix was not a better prompt. Round size is arithmetic against a fixed table over two
+columns the ledger already stores — the same category error #28 fixed for the event list,
+and the pattern was visible after that one. The bounds are **parsed** from the baseline
+rather than copied, because they are constructed as ⅓×–3× the Q2 median and get recomputed
+on every refresh; the tests read the real document, so a refresh that breaks the format
+fails `npm test` rather than the next unattended run.
+
+### The section with no source behind it
+
+`## Notes` was deleted, and the evidence made that easy. Three were ever written under the
+delta brief and all three restated an already-recorded event. One report printed
+`## New events: None today.` and then announced a $20M round two lines below it — a report
+contradicting itself in 280 characters, in the only section nothing generated.
+
+The leak starts upstream, in the finding, and the prompt has forbidden it from the start.
+The tempting fixes are a firmer instruction or a filter, and both are guesses until you know
+how often the rule actually holds. So it is counted instead: **50%**, 4 of the 8 findings
+ever handed a non-empty `ALREADY RECORDED` list, across four runs on three days. That is a
+different problem from an occasional slip, and it took one function to find out.
+
+One of those four had already been seen — session 8 recorded it as a success, because the
+events it named did stay out of the report. Both readings were true at once. **A rule can
+be broken inside an outcome you are filing as correct**, which is the argument for counting
+rather than noticing.
+
+### The one deliberately left open
+
+The same report also flagged a sector divergence that was not one: *"defence tech is not
+explicitly listed… although it can be mapped to 'Space & defence'"*, where the baseline's
+rule is *does not map onto any row*. The day before, the handoff had pre-registered the
+failure mode — over-flagging on sector labels — and set the trigger for building a taxonomy
+map: *"if the divergence section is long and mostly about sector labels."* It was one line.
+
+So it is logged and not built, with the decision rule written down before the data rather
+than after: two more runs producing a sector-label divergence that the "does not map" test
+would reject, and the map gets built. Designing it now would be n=1 dressed as a pattern.
+
+### What I got wrong here
+
+- **Read the report too shallowly the first time.** I reported one defect — the sector false
+  positive — and only found the B3 breach and the B2 violation on a second pass, after
+  opening the baseline and checking the numbers by hand. The first read accepted a `[B3]`
+  citation as evidence that B3 had been applied. It was evidence that B3 had been *named*.
+- **Wrote two test expectations from the wrong table.** I asserted the band label as
+  `Angel + Pre-Seed` and a Pre-Seed bound from memory of the *median* table sitting directly
+  above the flag table — the same adjacency the parser had to be anchored against. Both
+  failed on first run, the code was right, and the replacement case now discriminates
+  properly: a $5M Pre-Seed is above its own $3.9M flag but inside Seed's range, so a
+  mis-banded round gives the opposite verdict.
+- **Nearly shipped a column that lied about history.** `findings.leaked` is NULL when clean,
+  and every pre-existing row would have read as clean rather than unmeasured — #21 in a
+  schema, in a change written specifically to avoid that class of bug. Caught before the
+  first query, and backfilled.
+

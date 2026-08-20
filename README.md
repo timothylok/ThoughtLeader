@@ -343,6 +343,62 @@ zero — and a baseline that did not say so would manufacture divergences every 
 
 ---
 
+### 2.10 Who owns each section of the report
+
+The report has three sections and the model writes one of them. That split was not a
+design choice made up front; each section moved into code after the model got it wrong
+in production.
+
+| section | written by | why |
+|---|---|---|
+| `## New events` | code, from `eventsForRun()` | only the `UNIQUE(key)` insert knows what was actually novel. The model re-offered an event it had just been shown as recorded (#28) |
+| `## Round size vs baseline (B3)` | code, from the baseline's own flag table | arithmetic against a fixed table. The model called a $20M Seed "within the expected range" when B3 flags Seed above $12.0M, and checked a stageless round as a Seed when B3 says in words that it cannot be checked — both cited to B3 (#36) |
+| `## Divergence from baseline` | the model | sectors only. Round size is answered above it, and B2 instructs the loop not to flag investors at all |
+| ~~`## Notes`~~ | **deleted** | every one ever written restated an already-recorded event (#37) |
+
+**The B3 bounds are parsed from the baseline, not copied into code.** They are
+constructed — the document states them as ⅓× to 3× the Q2 median — so they are recomputed
+on every monthly refresh, and a second copy in TypeScript would drift silently against the
+document readers are told is authoritative. The parser anchors on the `flag below / flag
+above` header cells, because B3 has a second table with the same column count directly
+above it, and the tests read the **real** baseline file so a refresh that breaks the format
+fails `npm test` rather than the next daily run.
+
+Every non-verdict is a named result — `stage not stated`, `not a B3 row`, and `NOT CHECKED`
+when the table cannot be read — never a blank line that could pass for "nothing breached".
+That is §10 on the deliverable, and it is the same failure the empty baseline produced one
+section over.
+
+**Why `## Notes` was deleted rather than fixed.** Three were ever written under the delta
+brief and all three restated a recorded event. One report printed:
+
+```
+## New events
+None today.
+...
+## Notes
+Nybro's Seed round has been doubled to $20 million, supported by QIC...
+```
+
+A report contradicting itself in 280 characters, in the only section with no source behind
+it. The three older, pre-ledger runs never produced one at all, so nothing observed was
+lost by removing it.
+
+**The leak upstream is counted, not corrected.** The report only repeated what the finding
+wrote, and the prompt forbids naming a recorded event at all — restating one puts it back
+into that run's vector namespace for later iterations to recall. But the offending sentence
+can carry a genuinely new event alongside the leaked one, so dropping the finding loses real
+work and editing prose mid-sentence risks mangling it. Designing that fix from three
+anecdotes is what §12 warns against, so `leakedCompanies()` measures it instead, on both
+writers — the workflow and `/step` (#24).
+
+It is **50%**: 4 of the 8 findings ever handed a non-empty `ALREADY RECORDED` list named
+something on it, across four runs on three days. Stored in `findings.leaked`, NULL when
+clean, and the historical rows were backfilled — without that, NULL would mean both "clean"
+and "never measured", which is #21 exactly.
+
+---
+
 ## 3. Build
 
 ### 3.1 Prerequisites

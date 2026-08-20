@@ -351,7 +351,60 @@ six months while the docs went on saying 04:00.
 
 ---
 
+## 14. Prose Cannot Hold An Invariant — And Count It Before You Fix It
+
+**If a rule is mechanically checkable, checking it in prose is a category error.**
+
+The baseline here states round-size bounds as a table and the rule for using them in a
+sentence: *"a round with no stage stated cannot be checked against this table."* Both were
+handed to the model. In one report it broke all three parts — called a $20M Seed *"within
+the expected range according to [B3]"* when B3 flags Seed above $12.0M, checked a stageless
+round as a Seed anyway, and tried to resolve an investor divergence the baseline explicitly
+forbids flagging. The data it needed was two columns the ledger already stored.
+
+- **A false negative that asserts compliance is worse than silence.** *"None."* means
+  nobody looked. *"Within the expected range according to [B3]"* means somebody looked and
+  cleared it — over the largest divergence in the ledger. §10's rule is that "unmeasured"
+  must not print as "clean"; this is its sharper form, where the system *claims* to have
+  measured.
+- **Ask which sections of the deliverable the model should be allowed to decide.** Three
+  sections of this report moved into code, each after the model got it wrong in production:
+  the event list (#28), the round-size check (#36), and the empty-baseline notice (#30).
+  The pattern was visible after the first one.
+- **Derive the constants, never copy them.** The B3 bounds are constructed and get
+  recomputed on every baseline refresh, so they are parsed from the document rather than
+  duplicated in code — and the tests read the real document, so a refresh that breaks the
+  format fails `npm test` instead of the next unattended run. A copied constant is the
+  stale comment of §13 with arithmetic attached.
+
+**Where you cannot mechanise it, measure the violation rate before designing the fix.**
+
+The same run leaked an already-recorded event into the report, and the prompt has forbidden
+that from the start. The tempting fix is a better instruction, or a filter. Both are guesses
+until you know whether the rule holds 95% of the time or half the time — and three anecdotes
+cannot tell those apart.
+
+- Counting it here took one function and produced **50%**: 4 of the 8 findings ever handed
+  a non-empty list named something on it, across four runs on three days. That is a
+  different problem from an occasional slip, and it is now a number rather than an argument.
+- **Count on every writer.** The measurement went into the workflow *and* `/step`; a rule
+  counted on one path is not counted (§9).
+- **Backfill, or NULL means two things.** A new column recording violations reads every
+  pre-existing row as clean unless history is written into it — "never measured" and "no
+  violation" collapsing onto one value, which is §10 in a schema.
+- One of the leaks had already been observed and filed as a *success*, because the events
+  it named did stay out of the report. Both readings were true. **A rule can be broken
+  inside an outcome you are recording as correct**, which is why the rate has to be counted
+  rather than noticed.
+
+The test: for each claim your deliverable makes, can code check it? If yes, the model
+should not be the one making it. If no, what is the measured rate at which the rule you
+are relying on actually holds?
+
+---
+
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites
 due to overcomplication, clarifying questions come before implementation rather than
-after mistakes, the risks named during planning get measured rather than assumed, and
-bug fixes close the invariant rather than the incident.
+after mistakes, the risks named during planning get measured rather than assumed,
+bug fixes close the invariant rather than the incident, and the rules the system
+relies on are counted rather than assumed.

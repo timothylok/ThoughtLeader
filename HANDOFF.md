@@ -41,6 +41,58 @@ rate stays near 50% (cosmetic, within-run only — `recall()` is namespaced per 
 whether a leak surfaces in the divergence prose instead and the fix must move upstream.
 Also whether #34's sector false positive repeats.
 
+## 👉 Start here next session
+
+**1. Read the 2026-08-21 16:00Z run's report.** It is the first to exercise the new
+report path, and three questions were pre-registered before it ran:
+
+```sh
+set -a; . ./.env; set +a
+curl -s "$WORKER_URL/state" | head -20                 # newest run id
+curl -s "$WORKER_URL/state?run=<id>" | python -c "import json,sys; print(json.loads(sys.stdin.buffer.read().decode('utf-8'))['run']['report'])"
+```
+
+- Does `## Round size vs baseline (B3)` appear with the right verdict, and has the
+  divergence prose stopped making round-size claims?
+- Did `## Notes` stay gone, and did a leak surface in the divergence section instead?
+  If it did, the #37 fix has to move upstream to the finding.
+- Did #34's sector false positive repeat? **Two more and the taxonomy map gets built.**
+  One or none and it was noise. That rule was set before the data — do not renegotiate it
+  after seeing the run.
+
+**2. The leak rate is a query now, not an argument:**
+
+```sh
+npx wrangler d1 execute research-log --remote --json --command \
+  "SELECT COUNT(*) AS findings, SUM(CASE WHEN leaked IS NOT NULL THEN 1 ELSE 0 END) AS leaked
+     FROM findings f JOIN runs r ON r.id=f.run_id
+    WHERE r.topic LIKE 'Australian AI and tech funding%'"
+```
+
+Baseline as of 2026-08-21: **4 of 10** findings, **4 of 8** among those actually handed a
+non-empty list. Historical rows are backfilled, so NULL means clean, not unmeasured.
+
+**3. Decide `techcouncil`.** It has produced **0 of 5 ledger rows, ever** — every row comes
+from `startupdaily`. It is a policy feed, so it does not serve goal 2's sectors/round-sizes
+either. Dropping it leaves the loop single-sourced, which is the real argument for keeping
+it; the counter-argument is ~320 neurons and an iteration a day. Not decided.
+
+**4. `startupdaily` is at 88–96% of the excerpt budget.** 11 chunks × 1400 against
+`FRESH_CHARS_DEFAULT = 16_000`. One more post and `freshExcerpts()` drops one — the oldest,
+so the risk is modest, but it is the only producing source and that is the whole pipeline's
+headroom.
+
+**Still open, unchanged:** #15 (HTML CPU), #16 (source validation), #19 (retry path, never
+exercised by a real retry), #20 (the allocation window), #34 (gated), the NZ brief,
+`qwen3-embedding-0.6b` (deprioritised by the user).
+
+**Standing rules:** commit only when asked · push only when asked · secret scan gates the
+push · **never deploy inside the 16:00Z window**, and the pre-deploy check must *exit*, not
+print · `wrangler secret put` counts as a deploy · `POST /start` is blocked by the
+permission classifier here, so live `/step` verification needs the user to run it.
+
+---
+
 *Older "Where things stand" blocks below are the state of their own session, not this one.*
 
 **The baseline existed only as a plan. `GET /baseline` returned `""`.** Every delta report
