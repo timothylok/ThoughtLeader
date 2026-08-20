@@ -15,6 +15,8 @@ import {
   urlsIn,
   parseEvents,
   eventKey,
+  dropSection,
+  buildPrompt,
 } from '../src/prompt.ts';
 
 let pass = 0;
@@ -117,6 +119,45 @@ eq('key: a DIFFERENT amount is a different event (Series A then B)',
 eq('key: THE DEFECT THIS REPLACES — stage present one day, absent the next, same round',
   eventKey('Visaible.ai', '$1 million'), eventKey('Visaible.ai', '$1m'));
 eq('key: a missing amount still keys on the company', eventKey('Farmbot', null), 'farmbot|');
+
+// ------------------------------------------------- report section ownership
+const rpt = [
+  '## Divergence from baseline',
+  'A sector the baseline does not list took a round.',
+  '',
+  '## Notes',
+  'Feed was quiet.',
+].join('\n');
+eq('report: a section the code owns is removed whatever the model emitted',
+  dropSection(rpt, 'Divergence from baseline'), ['## Notes', 'Feed was quiet.'].join('\n'));
+eq('report: heading match is case-insensitive and tolerates trailing space',
+  dropSection(['## divergence from baseline ', 'x', '', '## Notes', 'y'].join('\n'),
+    'Divergence from baseline'), ['## Notes', 'y'].join('\n'));
+eq('report: a report without that section is unchanged',
+  dropSection(['## Notes', 'y'].join('\n'), 'Divergence from baseline'),
+  ['## Notes', 'y'].join('\n'));
+eq('report: dropping the only section leaves nothing, not a stray heading',
+  dropSection(['## Divergence from baseline', 'None.'].join('\n'),
+    'Divergence from baseline'), '');
+
+// ------------------------------------------------------ baseline reaches prompt
+// CLAUDE.md §12: read the effective setting from inside the code path that uses
+// it, not from the launcher. `POST /baseline` reporting ok is the launcher.
+const userMsg = (baseline) =>
+  buildPrompt('AU funding', ['Record events'], ['fresh text'], [], [], SD,
+    citableSources(SD, []), { baseline, knownEvents: [] })[1].content;
+
+const withBase = userMsg('Seed median $4.0M. Flag below $1.3M or above $12.0M.');
+eq('baseline: the text is rendered into the user message',
+  withBase.includes('Flag below $1.3M or above $12.0M.'), true);
+eq('baseline: under its own heading',
+  /BASELINE:\n[\s\S]*Seed median/.test(withBase), true);
+eq('baseline: empty means the model is told to SKIP divergence, not to find none',
+  userMsg('').includes('skip divergence flagging'), true);
+eq('baseline: whitespace-only is treated as absent',
+  userMsg('   \n  ').includes('skip divergence flagging'), true);
+eq('baseline: null is treated as absent',
+  userMsg(null).includes('skip divergence flagging'), true);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

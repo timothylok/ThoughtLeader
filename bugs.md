@@ -1657,3 +1657,51 @@ again — and because a roundup that names eight companies without their amounts
 `parseEvents` now refuses to record an event with no amount.
 
 ---
+
+## Bug 30 — "No divergence" and "never measured" printed as the same word
+
+**Found:** 2026-08-20, reading `GET /baseline` on the deployed worker.
+**Severity:** 🟠 Silent false negative in the deliverable · **Status:** **Fixed 2026-08-20**, version `a03a0ffa`
+
+`control.baseline` has been the empty string since the delta brief shipped, so
+`buildPrompt` correctly told the model to *skip* divergence flagging — and the report
+then printed:
+
+```
+## Divergence from baseline
+None.
+```
+
+Which reads as *checked, nothing found*. The truth was *there was nothing to check
+against*. Both of the loop's delta runs reported "None" and both were vacuous.
+
+**This is CLAUDE.md §10 pointed at the report instead of the spend guard.** `?? 0` made
+"unmeasurable" and "free" the same number; here an empty baseline made "not measured" and
+"clean" the same word. Neither can ever raise an alarm, and the §10 test — *name the case
+where this reads low without failing* — has the same answer both times: every case.
+
+The `findings.length === 0` early return had it worse. A run that produced no findings at
+all still emitted `Divergence from baseline: None.` — a measurement asserted by a code
+path that had nothing whatsoever to measure.
+
+**Fixed** by giving `synthesise` the baseline and letting the **code** own the section
+when it is absent:
+
+- absent → the report says `Not measured — no baseline recorded.`, written in code
+- absent → `NO_BASELINE_RULE` tells the model to omit its own divergence section
+- absent → `dropSection()` removes that section if the model emits one anyway
+
+The third step is not belt-and-braces. Instruction has lost to this model on this exact
+surface twice (#25, #28); on #28 it re-offered an event it had just been shown under
+ALREADY RECORDED. **The invariant is "the report never states a measurement that was not
+made", and an invariant enforced by asking is not enforced** (§9).
+
+**And the actual fix is data, not code:** the H1 2026 baseline was researched and posted
+the same day (`baseline/AU-AI-FUNDING-2026H1.md`, 5,055 chars, verified byte-identical
+in D1 by sha256). B2 — most active investors — is recorded in it as **NOT MEASURED**
+rather than filled: no source ranks Australian investors by deal count, Cut Through
+publishes no such leaderboard across its whole catalogue, and the ranked lists that
+surface in search are aggregator pages citing nothing. Writing those numbers down would
+have reproduced this very bug one section over.
+
+---

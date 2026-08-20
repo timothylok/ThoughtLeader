@@ -138,9 +138,37 @@ re-crawling for them.
 
 ## 7. Sequencing
 
-1. **The 2026-08-19 16:00Z run stays on the current brief.** It is the first live test
-   of bug #25's report half. Changing the brief the same day confounds the one
-   observation it exists to produce (§11, §12).
-2. Claude Code baseline pass → B1–B4.
-3. Build §4's three pieces.
-4. Switch the brief, and read the first delta run before touching anything else.
+1. ~~**The 2026-08-19 16:00Z run stays on the current brief.**~~ Done. Run `35e0c08b`,
+   3/5 sources-exhausted, zero false positives and zero false negatives against what
+   the feed held.
+2. ~~Claude Code baseline pass → B1–B4.~~ **Done 2026-08-20** —
+   `baseline/AU-AI-FUNDING-2026H1.md`, posted to `control.baseline` and verified
+   byte-identical by sha256. See below.
+3. ~~Build §4's three pieces.~~ Done — ledger, prompt block, delta vocabulary.
+4. ~~Switch the brief, and read the first delta run.~~ Done; bugs #27–#29 came out of it.
+
+## 8. What the baseline pass actually returned
+
+**B1 and B3 came back quantitative.** Cut Through Venture publishes a stable sector
+taxonomy quarter to quarter and medians by stage, so the baseline states H1 2026 sector
+capital, Q1→Q2 growth, and median round size across three periods.
+
+**B2 came back empty, and that is the finding.** No source ranks Australian investors by
+deal count — not Cut Through, across its entire insights catalogue. The ranked lists that
+surface in search are SEO aggregator pages whose counts cite nothing. The baseline
+records B2 as **NOT MEASURED** and instructs the loop *not to flag investor divergence*.
+
+This matters beyond one section. §3 wrote B2 as though the data existed, and the earlier
+plan to "improve stage and investor extraction coverage first" assumed the *loop* was the
+constraint. It is not: even at 4/4 investor coverage there would be nothing to compare
+against. **The gap was in the baseline, not in the extractor** — validate the source
+before designing around it (§5), including when the source is your own plan.
+
+**The divergence thresholds are constructed, and labelled so.** Cut Through publishes
+medians, not ranges; the ⅓×–3× bounds in B3 are a stated choice. A threshold whose
+provenance is not on its face becomes a measurement in three weeks.
+
+Two coverage limits are written into the baseline because they would otherwise produce
+false divergences: Q1's sector list is a **top ten** summing to $1.63B of a stated $1.8B,
+so "not listed" means *below $76M*, not zero; and the CY2025 taxonomy differs, so only
+fintech survives the boundary and growth must not be computed across it.

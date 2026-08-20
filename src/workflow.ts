@@ -26,6 +26,8 @@ import {
   stripUngroundedUrls,
   urlsIn,
   REPORT_SYSTEM,
+  NO_BASELINE_RULE,
+  dropSection,
 } from './prompt.ts';
 import { alert } from './notify.ts';
 import {
@@ -430,10 +432,12 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
     topic: string,
     goals: string[],
   ): Promise<{ report: string; neurons: number }> {
-    const [findings, added] = await Promise.all([
+    const [findings, added, baseline] = await Promise.all([
       recentFindings(this.env.DB, runId, 60),
       eventsForRun(this.env.DB, runId),
+      getControl(this.env.DB, BASELINE_KEY),
     ]);
+    const hasBaseline = Boolean(baseline && baseline.trim());
 
     // The "new events" list is built from the LEDGER, not from the findings'
     // prose, because only the UNIQUE(key) insert knows what was actually novel.
@@ -457,8 +461,13 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
         : 'None today.';
     const eventSection = `## New events\n${eventList}\n\n`;
 
+    // Written HERE, not by the model, whenever there is no baseline: "None."
+    // and "never measured" are different results and printed the same (§10).
+    const noBaselineSection = '## Divergence from baseline\nNot measured — no baseline recorded.';
+
     if (findings.length === 0) {
-      return { report: `${eventSection}## Divergence from baseline\nNone.`, neurons: 0 };
+      const divergence = hasBaseline ? '## Divergence from baseline\nNone.' : noBaselineSection;
+      return { report: eventSection + divergence, neurons: 0 };
     }
 
     // No SOURCE line. Findings now carry their citations inline, per claim, so
@@ -473,7 +482,7 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
     const body = findings.map((f) => `[${f.n}] ${f.finding}`).join('\n\n');
     const res = (await this.env.AI.run(this.env.REASON_MODEL, {
       messages: [
-        { role: 'system', content: REPORT_SYSTEM },
+        { role: 'system', content: hasBaseline ? REPORT_SYSTEM : REPORT_SYSTEM + NO_BASELINE_RULE },
         {
           role: 'user',
           content: `TOPIC: ${topic}\n\nGOALS:\n${goals.map((g, i) => `${i + 1}. ${g}`).join('\n')}\n\nFINDINGS:\n${body}`,
@@ -492,9 +501,14 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
     const raw = (res.response ?? '').trim();
     // The ledger section is ours and is already grounded; only the model's half
     // is swept. Its URLs must have come from a finding (bugs.md #13, #22, #25).
-    return {
-      report: eventSection + (raw ? stripUngroundedUrls(raw, urlsIn(body)) : body),
-      neurons,
-    };
+    const swept = raw ? stripUngroundedUrls(raw, urlsIn(body)) : body;
+    // The model is ASKED to omit the section; that it actually did is not
+    // assumed. Instruction has lost to this model on the report surface before
+    // (#25, #28), so the code removes it and writes its own.
+    const modelHalf = hasBaseline ? swept : dropSection(swept, 'Divergence from baseline');
+    const report = hasBaseline
+      ? eventSection + swept
+      : `${eventSection}${noBaselineSection}${modelHalf ? `\n\n${modelHalf}` : ''}`;
+    return { report, neurons };
   }
 }

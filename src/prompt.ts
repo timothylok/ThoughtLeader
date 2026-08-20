@@ -195,6 +195,26 @@ function normAmount(raw: string | null): string {
 }
 
 /**
+ * Remove a `## Heading` section and everything under it, up to the next `##`.
+ *
+ * Used where the CODE owns a section and the model must not also emit one. The
+ * model is told to omit it, but instruction alone has already failed on this
+ * exact surface three times (bugs.md #25, #28) — so the guarantee is structural
+ * and the instruction is only a hint.
+ */
+export function dropSection(text: string, heading: string): string {
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let skipping = false;
+  for (const line of lines) {
+    const isHeading = /^\s*##\s+/.test(line);
+    if (isHeading) skipping = line.trim().toLowerCase() === `## ${heading}`.toLowerCase();
+    if (!skipping) out.push(line);
+  }
+  return out.join('\n').trim();
+}
+
+/**
  * `Sophiie AI` + `$5 million` -> `sophiieai|5000000`.
  *
  * Keyed on AMOUNT, not stage. Stage was the first choice and the first delta run
@@ -462,3 +482,16 @@ Rules:
 - Cite by copying a URL that already appears inline in the finding you are using, exactly as written. Every finding carries its own citations; a claim with no URL beside it gets no citation, and that is correct rather than a gap to fill. Never construct, complete or guess a URL — not even by adding "www." — and never cite a bare [n] index.
 - "None today." is a complete and correct report. A quiet day is a result, not a failure, and padding it with recalled background is the failure.
 - No preamble, no restating the task, no concluding pep talk. Under 500 words.`;
+
+/**
+ * Appended to REPORT_SYSTEM when `control.baseline` is empty.
+ *
+ * "No divergence found" and "divergence was never measured" printed as the same
+ * word — "None." — for every run to date, because the baseline has been empty
+ * since the ledger shipped and nothing in the report said so. That is CLAUDE.md
+ * §10 on the deliverable rather than in the spend guard: a default that turns
+ * "not measured" into "clean" will never raise an alarm.
+ */
+export const NO_BASELINE_RULE = `
+
+There is no baseline recorded. OMIT the "## Divergence from baseline" section entirely — it is written for you.`;
