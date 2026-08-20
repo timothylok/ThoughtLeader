@@ -82,9 +82,13 @@ non-empty list. Historical rows are backfilled, so NULL means clean, not unmeasu
 unless the model proposes a grounded link off the feed. If cost does not fall by roughly
 two thirds, something is enqueuing sources that were not there before.
 
-**Also unresolved in the brief:** goal 2 still asks the loop to flag *"an investor it does
-not rank as active"*, which B2 explicitly forbids and both prompts now refuse. The goal
-text is the last of the three places that still asks for it.
+**Goal 2 was rewritten 2026-08-21**, and re-diagnosed #34 on the way: the brief said flag
+*"a sector it does not list among the concentrations"* while B4 says *"does not map onto
+any row"*. Different tests, and the model applied the one it was given — so the flag was
+correct under the brief and wrong under the baseline. The goal now states the "does not
+map" test verbatim and drops the round-size and investor clauses (code owns one, B2 forbids
+the other). **The #34 gate is unchanged**: two more sector false positives and the taxonomy
+map gets built. What changed is the prior, not the rule.
 
 **4. `startupdaily` is at 88–96% of the excerpt budget.** 11 chunks × 1400 against
 `FRESH_CHARS_DEFAULT = 16_000`. One more post and `freshExcerpts()` drops one — the oldest,

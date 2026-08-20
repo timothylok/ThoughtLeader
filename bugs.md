@@ -39,7 +39,7 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [31](#bug-31--the-daily-run-was-scheduled-to-drift-an-hour-in-six-weeks) | The daily run was scheduled to drift an hour in six weeks | 🟡 Latent schedule drift | ✅ **Fixed & simulated** (`3602f68b`) |
 | [32](#bug-32--a-locale-decoded-pipe-reported-clean-utf-8-as-corrupt) | A locale-decoded pipe reported clean UTF-8 as corrupt | 🟠 False diagnosis | Diagnosed; practice added |
 | [33](#bug-33--every-write-endpoint-was-open-to-anyone-holding-the-url) | Every write endpoint was open to anyone holding the URL | 🔴 Unauthenticated spend | ✅ **Fixed & verified** (`79b9bd95`) |
-| [34](#bug-34--a-sector-that-maps-onto-the-taxonomy-was-reported-as-a-divergence) | A sector that maps onto the taxonomy was reported as a divergence | 🟠 False positive | **Open** (fix gated on 2 more runs) |
+| [34](#bug-34--a-sector-that-maps-onto-the-taxonomy-was-reported-as-a-divergence) | A sector that maps onto the taxonomy was reported as a divergence | 🟠 False positive | ⚠️ **Re-diagnosed** — brief said "does not list", baseline says "does not map"; goal corrected, still gated on 2 runs |
 | [35](#bug-35--the-replacement-seed-cannot-produce-a-ledger-row-either) | The replacement seed cannot produce a ledger row either | 🟡 Wasted iteration | ✅ **Fixed 2026-08-21** (brief change) |
 | [36](#bug-36--the-b3-round-size-rule-was-applied-in-both-wrong-directions-at-once) | The B3 round-size rule was applied in both wrong directions at once | 🔴 False compliance | ✅ **Fixed 2026-08-21** (computed in code) |
 | [37](#bug-37--the-report-discussed-a-recorded-event-and-called-the-ledger-the-baseline) | The report discussed a recorded event, and called the ledger "the baseline" | 🟠 Wrong attribution | ✅ **Fixed 2026-08-21** (section deleted; leak rate measured at 50%) |
@@ -1849,8 +1849,9 @@ calls itself.
 ## Bug 34 — A sector that maps onto the taxonomy was reported as a divergence
 
 **Found:** 2026-08-21, reading daily run `ab39eff8` — the first run with a baseline to
-diverge *from*. **Severity:** 🟠 False positive in the deliverable · **Status:** **Open**
-(logged, fix gated on evidence — see "What would justify the fix")
+diverge *from*. **Severity:** 🟠 False positive in the deliverable · **Status:** ⚠️
+**Re-diagnosed 2026-08-21 — the brief and the baseline stated different tests.** The goal
+text was corrected; whether that is sufficient is still gated on the next two runs.
 
 The report's only divergence claim:
 
@@ -1873,6 +1874,37 @@ finding contradicts itself.
 over-flagging, not under-flagging… if the divergence section is long and mostly about
 sector labels, the fix is a mapping step in code, not a stricter prompt."* It named
 Visaible.ai's "travel" as the case to watch. A different one arrived first.
+
+### Re-diagnosis: the model was following the brief
+
+Reading the two documents side by side, hours after the entry above was written:
+
+```
+goal 2:  "...a sector it does not list among the concentrations..."
+B4:      "...a funded company whose sector does not map onto any row below..."
+```
+
+**Those are different tests, and the model applied the one it was given.** "Does not list"
+is a lookup for the literal string; "does not map" is a judgement about meaning. Under the
+goal's test, `defence tech` is genuinely absent from B1's rows and the flag was *correct*.
+Under the baseline's test it maps to `Space & defence` and the flag is wrong.
+
+So the first write-up here was unfair to the model and pointed at the wrong layer. This is
+CLAUDE.md §5 in its own file: **the brief is a source, and it is the one never probed** —
+it was carried through nine runs asserting a rule the baseline it references does not
+state. Nothing checked the two against each other, because both read as authoritative and
+neither is code.
+
+**Fixed in the brief 2026-08-21**: goal 2 now states the "does not map" test verbatim, adds
+that a sector matching a row under a different name is not a divergence, and removes the
+round-size and investor clauses — code owns the first (#36) and B2 forbids the second, so
+the goal had been asking for both against the rest of the system.
+
+**This does not close the bug.** The prompt now carries the right test, which is still an
+instruction; the gate below is unchanged, and the next two runs decide whether a taxonomy
+map in code is needed. What has changed is the prior: the most likely cause of the one
+observed false positive has been removed, so a repeat is now evidence about the *model*
+rather than about the brief.
 
 ### What would justify the fix, and why it is not justified yet
 
