@@ -43,6 +43,7 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [35](#bug-35--the-replacement-seed-cannot-produce-a-ledger-row-either) | The replacement seed cannot produce a ledger row either | 🟡 Wasted iteration | ✅ **Fixed 2026-08-21** (brief change) |
 | [36](#bug-36--the-b3-round-size-rule-was-applied-in-both-wrong-directions-at-once) | The B3 round-size rule was applied in both wrong directions at once | 🔴 False compliance | ✅ **Fixed 2026-08-21** (computed in code) |
 | [37](#bug-37--the-report-discussed-a-recorded-event-and-called-the-ledger-the-baseline) | The report discussed a recorded event, and called the ledger "the baseline" | 🟠 Wrong attribution | ✅ **Fixed 2026-08-21** (section deleted; leak rate measured at 50%) |
+| [38](#bug-38--a-seed-that-is-not-a-daily-feed-on-a-brief-that-says-daily) | A seed that is not a daily feed, on a brief that says "daily" | 🟡 Wasted iteration | ✅ **Fixed 2026-08-21** (brief change) |
 
 ---
 
@@ -2071,3 +2072,68 @@ report-level leak to zero while the finding-level rate stays near 50%? If it doe
 finding leak is cosmetic and within-run only (`recall()` is namespaced per run, so it
 cannot reach tomorrow). If a leak starts appearing in the divergence prose instead, the
 fix has to move upstream after all.
+
+---
+
+## Bug 38 — A seed that is not a daily feed, on a brief that says "daily"
+
+**Found:** 2026-08-21, auditing which sources have ever contributed. **Severity:** 🟡
+Wasted iteration + induced restatement · **Status:** ✅ **Fixed 2026-08-21** — dropped from
+`control.daily_brief`, no deploy
+
+`techcouncil.com.au/feed` was seeded from day zero and has produced **0 of 5 ledger rows**.
+Three separate reasons, and the first is the one nobody checked:
+
+**It is not a daily feed.** Its ten items span **March to August 2026** — roughly two a
+month — and the newest was published **nine days before** the run that read it. The brief's
+topic is *"track new events **daily**"*. On most days this source has published nothing
+since the last run, so the loop re-reads the same unchanged items every morning. That is
+knowable from one `curl` and was never run.
+
+**Its content is the wrong kind.** Submissions, media releases, Senate opening statements,
+a jobs report — what an industry body publishes. Both findings it has ever produced say so:
+
+```
+35e0c08b n=2: No new … funding events were found in the provided source (techcouncil) …
+ab39eff8 n=2: No new … funding events were found in the provided source (techcouncil),
+              as it does not mention any specific funding amounts or rounds.
+```
+
+**It degraded the runs it was in.** In `ab39eff8` it contributed **47 of 74 chunks (64%)**,
+all embedded into the run's namespace, competing with startupdaily's 11 for 8 recall slots.
+And its iteration in `35e0c08b` produced **one of the four leaks measured in #37**: with
+nothing to report from techcouncil, the model restated recalled Sophiie AI and Visaible.ai
+material instead. README §2.8 names that pressure exactly — *"the loop had to produce a
+finding every iteration and satisfied that demand by restating recalled material."* **An
+empty iteration is the condition that generates restatement, and this source supplied it
+every run.**
+
+**The redundancy argument does not survive.** Dropping it leaves the loop single-sourced,
+which is a real fragility — but if `startupdaily` fails, the run yields nothing whether or
+not techcouncil is seeded. A source that cannot produce a funding event is not a fallback
+for the one that does. That is #35's reasoning applied to the source that survived #35.
+
+**Where it does belong:** the monthly baseline pass. Tech Council's jobs report and budget
+submissions are useful to a document about the shape of the market; they are useless to a
+daily event tracker. Same verdict #29 reached about `techboard.com.au/feed` — *baseline
+material for the Claude Code pass, not delta material.*
+
+**The daily brief now seeds one source.** Every ledger row to date came from iteration 1
+reading `startupdaily`, so on the evidence nothing is lost:
+
+```
+Space Angel / Sophiie AI / Visaible.ai   run=0540d791 n=1   startupdaily
+Nybro                                    run=35e0c08b n=1   startupdaily
+Seitec                                   run=ab39eff8 n=1   startupdaily
+```
+
+**What this does NOT fix.** There is still no second daily Australian funding-event feed
+among everything tested (#29, #35). Single-sourcing is a genuine fragility that techcouncil
+was never addressing. Finding a real second source is the open work; keeping a source that
+cannot produce one is not a substitute for it.
+
+**A third validation, alongside extractability and relevance: CADENCE.** #29 established
+that a source can extract perfectly and be about something else. #35 added that it can be
+on-topic and unable to produce a row under the recording rule. This adds: it can be
+on-topic *and* recordable in principle and still publish too rarely to answer a question
+asked daily. **Check the pubDate spread before seeding, not the character count.**

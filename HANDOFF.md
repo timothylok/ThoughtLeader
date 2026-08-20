@@ -9,10 +9,16 @@
 real for the first time this morning, starting `ab39eff8` at **04:00:09 NZST** on the
 `0 16` arm. Next run 2026-08-22 04:00 NZST; the `0 15` arm takes over on 27 Sep.
 
-**Sources: 2, not 3.** `startupsmart/feed` was dropped (bugs.md #35) — it names companies
-without amounts, and an event without an amount is unrecordable, so it cannot produce a
-ledger row. `techcouncil` is still seeded and has produced 0 of 5 ledger rows ever; every
-row to date comes from `startupdaily.net/feed`.
+**Sources: 1.** Both other seeds were dropped the same day. `startupsmart/feed` names
+companies without amounts, and an event with no amount is unrecordable (#35).
+`techcouncil.com.au/feed` publishes ~2 items a month — not a daily feed at all, on a brief
+that says "daily" — and its empty iteration produced one of #37's four leaks (#38).
+
+**Every ledger row ever came from iteration 1 reading `startupdaily`**, so the expected
+shape now is a 1-iteration run ending `sources-exhausted` at roughly a third of the cost.
+**The open work is finding a real second daily funding feed** — there is none among
+everything tested (#29, #35, #38), and single-sourcing is a genuine fragility that
+techcouncil was never addressing.
 
 **Ledger:** 5 events. **Spend:** 966 neurons on UTC 2026-08-20 against 10,000.
 
@@ -72,10 +78,13 @@ npx wrangler d1 execute research-log --remote --json --command \
 Baseline as of 2026-08-21: **4 of 10** findings, **4 of 8** among those actually handed a
 non-empty list. Historical rows are backfilled, so NULL means clean, not unmeasured.
 
-**3. Decide `techcouncil`.** It has produced **0 of 5 ledger rows, ever** — every row comes
-from `startupdaily`. It is a policy feed, so it does not serve goal 2's sectors/round-sizes
-either. Dropping it leaves the loop single-sourced, which is the real argument for keeping
-it; the counter-argument is ~320 neurons and an iteration a day. Not decided.
+**3. Watch the run shape.** One seed now, so expect 1 iteration and `sources-exhausted`
+unless the model proposes a grounded link off the feed. If cost does not fall by roughly
+two thirds, something is enqueuing sources that were not there before.
+
+**Also unresolved in the brief:** goal 2 still asks the loop to flag *"an investor it does
+not rank as active"*, which B2 explicitly forbids and both prompts now refuse. The goal
+text is the last of the three places that still asks for it.
 
 **4. `startupdaily` is at 88–96% of the excerpt budget.** 11 chunks × 1400 against
 `FRESH_CHARS_DEFAULT = 16_000`. One more post and `freshExcerpts()` drops one — the oldest,
