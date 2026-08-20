@@ -5,6 +5,37 @@ to date printed `## Divergence from baseline → None.`, which reads as *checked
 and meant *nothing to check against*. Both halves fixed this session: the report no longer
 fakes the measurement, and the baseline now exists.
 
+## The write endpoints now require `CONTROL_TOKEN` — deployed `c40fa659`
+
+The repo is public and `POST /start`, `/stop`, `/baseline`, `/step` were open to anyone
+holding the URL. One gate before the switch in `fetch()`, keyed the way the switch is
+keyed, so a new route is checked against one list.
+
+**The set is "writes or spends", not "is a POST".** `GET /search` is in it: it mutates
+nothing, but `recall` embeds the query, and an AI call is a write to the neuron budget —
+the same call site the spend guard missed in bugs.md #17. Reads stay open because
+`liverun.html` polls `/state` and `/usage` from `file://` and neither costs anything.
+
+**An unset secret denies**, and that was tested the only honest way: the code was
+deployed *before* the secret existed, and production answered **401 to a correct client
+token**. A fail-open default here would have passed every test that used the token.
+
+Verified 12 cases on a remote dev server and 8 in production — no header, wrong token,
+and correct-token-plus-one-character all deny (the last is what proves the length check
+and `timingSafeEqual` rather than a prefix match); the token allows; open routes stay
+200. The denied `POST /baseline {"text":"HACKED"}` attempts ran against **real D1**: the
+baseline still hashes to `d18d6d14…`, spend is 0, no run was started.
+
+The token is in `.env` (gitignored) and as a Worker secret. Rotate by setting both:
+
+```sh
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+printf '%s' "$NEW" | npx wrangler secret put CONTROL_TOKEN   # then update .env
+```
+
+Crons are unaffected — they enter through `scheduled()`, not `fetch()`, and no source
+file reads `WORKER_URL`, so the Worker never calls itself.
+
 ## The daily cron holds 04:00 NZ across DST — deployed `3602f68b`
 
 `0 16 * * *` was 04:00 NZST and would have become 05:00 NZDT on 2026-09-27. Cron
