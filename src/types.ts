@@ -23,6 +23,14 @@ export interface Env {
    * credential. Unset means alerting is silently disabled.
    */
   ALERT_WEBHOOK?: string;
+
+  /**
+   * Shared secret for the routes that write or spend. Set with
+   * `wrangler secret put CONTROL_TOKEN` — never in wrangler.jsonc, it is a
+   * credential. **Unset denies those routes**; it must never read as "no auth
+   * configured, let it through" (CLAUDE.md §10).
+   */
+  CONTROL_TOKEN?: string;
 }
 
 /**

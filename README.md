@@ -398,9 +398,18 @@ npx wrangler d1 execute research-log --remote --file=./schema.sql
 
 Live deployment from this build: see `WORKER_URL` in your local `.env` (copy `.env.example`).
 
+**Routes that write or spend need `CONTROL_TOKEN`** — `POST /start`, `/stop`,
+`/baseline`, `/step` and `GET /search`, which embeds its query and so bills neurons.
+Send it as `authorization: Bearer`; an unset secret denies them all. Reads (`/state`,
+`/usage`, `/events`, `GET /baseline`, `/live`) are open, because `liverun.html` polls
+them from `file://` and none of them cost anything.
+
 ```sh
+set -a; . ./.env; set +a
+AUTH="authorization: Bearer $CONTROL_TOKEN"
+
 # Start a run
-curl -X POST https://<worker>/start -H 'content-type: application/json' -d '{
+curl -X POST "$WORKER_URL/start" -H "$AUTH" -H 'content-type: application/json' -d '{
   "topic": "Post-quantum cryptography migration in TLS",
   "goals": [
     "Identify which PQC algorithms are standardised and deployed",
@@ -416,19 +425,19 @@ curl -X POST https://<worker>/start -H 'content-type: application/json' -d '{
 # Add "dryRun": true to seed D1 WITHOUT launching the loop — then drive it
 # one iteration at a time with POST /step. Use this for any testing.
 
-curl "https://<worker>/state?run=<id>"                  # progress + findings
-curl "https://<worker>/search?run=<id>&q=lattice"       # semantic search
-curl -X POST "https://<worker>/stop?run=<id>"           # halt at next assess
-curl "https://<worker>/usage"                           # neuron spend today vs budget
-curl "https://<worker>/events?limit=50"                 # the funding-event ledger
-curl "https://<worker>/baseline"                        # what deltas are measured against
+curl "$WORKER_URL/state?run=<id>"                          # progress + findings
+curl -H "$AUTH" "$WORKER_URL/search?run=<id>&q=lattice"    # semantic search — SPENDS
+curl -X POST -H "$AUTH" "$WORKER_URL/stop?run=<id>"        # halt at next assess
+curl "$WORKER_URL/usage"                                   # neuron spend today vs budget
+curl "$WORKER_URL/events?limit=50"                         # the funding-event ledger
+curl "$WORKER_URL/baseline"                                # what deltas are measured against
 
 # Set the baseline. Content only — no deploy. Verify by reading it BACK and
 # comparing a hash against the file, not by trusting the ok/chars response:
 # `chars` is UTF-16 code units and the file is UTF-8 bytes, so the two numbers
 # legitimately differ and neither proves the content survived (CLAUDE.md §12).
 python -c "import io,json;print(json.dumps({'text':io.open('baseline/AU-AI-FUNDING-2026H1.md',encoding='utf-8').read()}))" > /tmp/bl.json
-curl -X POST "https://<worker>/baseline" -H 'content-type: application/json' --data-binary @/tmp/bl.json
+curl -X POST "$WORKER_URL/baseline" -H "$AUTH" -H 'content-type: application/json' --data-binary @/tmp/bl.json
 
 npx wrangler workflows instances list research-loop
 npx wrangler tail
@@ -926,14 +935,14 @@ is the test that catches it:
 
 ```sh
 W=https://<your-worker>.workers.dev
-R=$(curl -s -X POST $W/start -H 'content-type: application/json' -d '{
+R=$(curl -s -X POST $W/start -H "$AUTH" -H 'content-type: application/json' -d '{
   "topic":"...","goals":["..."],
   "sources":["<source A>","<source B>"],
   "maxIterations":3,"dryRun":true}' | jq -r .runId)
 
-curl -s -X POST "$W/step?run=$R"     # ingest A
+curl -s -X POST -H "$AUTH" "$W/step?run=$R"     # ingest A
 sleep 35                              # Vectorize indexing lag — see §1.3
-curl -s -X POST "$W/step?run=$R"     # ingest B; expect recalled > 0
+curl -s -X POST -H "$AUTH" "$W/step?run=$R"     # ingest B; expect recalled > 0
 sleep 35
 curl -s "$W/search?run=$R&q=<phrase unique to A>"   # must return A, not B
 ```

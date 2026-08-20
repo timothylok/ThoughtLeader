@@ -52,13 +52,54 @@ const json = (data: unknown, status = 200) =>
     },
   });
 
+/**
+ * Routes that require `CONTROL_TOKEN`. Keyed exactly like the switch below, so
+ * there is one list to check a new route against.
+ *
+ * The invariant is **every route that writes or spends**, not "every POST".
+ * `GET /search` mutates nothing and is in here anyway: `recall` embeds the
+ * query, and an AI call is a write to the neuron budget. Leaving it out would
+ * repeat bugs.md #17, where the recall embedding was the call site the spend
+ * guard forgot.
+ *
+ * Reads stay open: liverun.html polls /state and /usage from file://, and
+ * neither costs anything.
+ */
+const PROTECTED = new Set([
+  'POST /start',
+  'POST /stop',
+  'POST /baseline',
+  'POST /step',
+  'GET /search',
+]);
+
+/**
+ * Constant-time compare against the shared secret. `===` on a credential leaks
+ * its prefix through timing; `timingSafeEqual` throws on a length mismatch, so
+ * the lengths are checked first.
+ */
+function authorised(request: Request, env: Env): boolean {
+  // An unset secret denies. "Not configured" must not mean "not required" —
+  // the fail-open default is the one that never raises an alarm (CLAUDE.md §10).
+  if (!env.CONTROL_TOKEN) return false;
+  const enc = new TextEncoder();
+  const got = enc.encode((request.headers.get('authorization') ?? '').replace(/^Bearer /, ''));
+  const want = enc.encode(env.CONTROL_TOKEN);
+  return got.byteLength === want.byteLength && crypto.subtle.timingSafeEqual(got, want);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const runId = url.searchParams.get('run') ?? '';
+    const route = `${request.method} ${url.pathname}`;
+
+    if (PROTECTED.has(route) && !authorised(request, env)) {
+      return json({ error: 'unauthorised' }, 401);
+    }
 
     try {
-      switch (`${request.method} ${url.pathname}`) {
+      switch (route) {
         case 'POST /start':
           return await start(request, env);
         case 'POST /stop':
