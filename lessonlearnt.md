@@ -815,3 +815,81 @@ It has to be **diverged from**, and that imposes rules a prose write-up escapes:
 - **Lost the test suite to a cleared scratchpad** between sessions and had to rewrite it.
   Tests that live outside the repo are not tests. `npm test` — 40 assertions — is now in
   the repo.
+
+---
+
+## 13. Addendum — session 10, 2026-08-20
+
+Three items, and the middle one is the one worth keeping: the thing that was broken was
+the instrument, not the system.
+
+### The limitation you wrote down is still a defect
+
+`0 16 * * *` was the daily cron, and every place it appeared carried a comment saying
+Cron Triggers are UTC only and this drifts to 05:00 NZDT in September. Three files agreed
+about it. Nobody fixed it, because writing the caveat felt like handling it.
+
+Six weeks out, that is a run happening at the wrong hour for six months while the README
+insists on 04:00. The fix is two arms — `0 15` and `0 16` both registered, both firing —
+and a gate that starts a run only on the arm that is 04:00 in `Pacific/Auckland` for the
+instant scheduled. Simulating a year gives 365 distinct local days, all at 04:00.
+
+**A documented limitation is a defect with a comment attached.** The test: if the comment
+were deleted, would this read as a bug? Then it is one.
+
+### The reader was the thing that was broken
+
+The baseline in D1 was reported here as mojibake — `â€"` for every em dash, the arrows in
+its own figures mangled — against a committed file that hashed to `d18d6d14…`. It was
+wrong. `json.load(sys.stdin)` decodes with the **locale** codec, cp1252 on this machine,
+and stored UTF-8 came back corrupted every single time it was read.
+
+Two tells were available before the diagnosis and both were skipped:
+
+- the "corrupt" character count was **exactly the byte count** of the correct file — two
+  numbers that should never match, matching;
+- after a re-post the Worker acknowledged as `chars: 6434`, the same read *still* reported
+  6,501 mojibake chars. A value provably correct at the source, read as damaged.
+
+§12 said to report the effective setting from inside the code path rather than from the
+launcher, and I applied it to the Worker while treating my own `curl | python` as neutral.
+It is not neutral. It is a second witness with a locale in its path, and it fails by
+producing plausible wrong output instead of an error. **Distrust the witness that has a
+locale in it, and re-read before believing damage.**
+
+The cost was small — a no-op re-post and a wrong paragraph, corrected in the same session.
+The lesson is not "use UTF-8". It is that a confident bug report about stored data is a
+claim about a read, and the read is testable.
+
+### A guard tested with the credential always passes
+
+Every write endpoint was open: `POST /start`, `/stop`, `/baseline`, `/step` took no
+credential, and the only thing between them and the internet was that the URL was
+gitignored. That framing is what kept it alive — the risk was filed as "the URL must not
+leak", so the fix was a `.gitignore` entry rather than a gate.
+
+Two things worth carrying:
+
+- **The protected set is "writes or spends", not "is a POST".** `GET /search` mutates
+  nothing and bills neurons, because `recall` embeds the query — the same call site the
+  spend guard missed in bugs.md #17. Naming the invariant as a *verb list* rather than a
+  *method list* is what catches it.
+- **An unset secret must deny, and that is the case you cannot test with the secret set.**
+  So it was tested by deploying the code *before* creating the secret: production returned
+  401 to a correct client token. Every other test — no header, wrong token, correct token
+  plus one character — was run afterwards, and none of them would have caught a fail-open
+  default.
+
+§7 says test the kill switch by triggering it. The deploy-before-the-secret ordering is
+that rule applied to a credential: arrange for the failure you are worried about, in
+production, before anything depends on it not happening.
+
+### What I got wrong in this stretch
+
+- **Reported a data corruption that did not exist**, in detail, with the mangled figures
+  quoted. Two independent tells were in the output before the claim was written.
+- **Left the bug-log index stale at #26** while adding entries through #30 — the index is
+  the only part of that file anyone reads first.
+- **Nearly shipped the DST gate on wall-clock hour**, which cannot be tested except at
+  04:00. Keying it on the UTC offset instead made it testable at any hour, for both
+  regimes, and that is the only reason the year-long simulation exists.

@@ -136,6 +136,16 @@ against — the command that proved the other side exists at all?
   figure at least once.
 - Treat every write inside a retryable step as if it will run three times. Partial
   execution is the normal case.
+- **An unset credential must deny, and that is the case you cannot test with it set.**
+  The write endpoints here went unauthenticated for nine days because the risk was filed
+  as "the URL must not leak" — a `.gitignore` entry instead of a gate. When the gate was
+  added, the fail-open default was ruled out by deploying the code *before* creating the
+  secret and confirming production returned 401 to a **correct** token. Every other test
+  sends the credential, and every one of them passes against a guard that never checks.
+- **Name the protected set by verb, not by method.** "Every route that writes or spends"
+  includes `GET /search`, which mutates nothing and bills neurons because recall embeds
+  the query. "Every POST" does not — and that is the same call site §7 already lost a
+  spend guard to.
 
 ### 7.1 No code deployment during a live run
 
@@ -303,10 +313,41 @@ number was self-consistent.
 - **State the arm sizes when reporting.** "n=8 vs n=3" makes an n=0 arm impossible
   to hide behind a percentage. This is §11 pointed at your own instrumentation
   rather than at the world.
+- **Your own reader is an instrument, and it is not neutral.** A `curl | python`
+  check reported the stored baseline here as mojibake for an entire investigation:
+  `json.load(sys.stdin)` decodes with the **locale** codec, so clean UTF-8 came back
+  corrupted on every read. Name the encoding on both sides —
+  `sys.stdin.buffer.read().decode('utf-8')`, `open(p, encoding='utf-8')`. Two tells
+  came before the diagnosis and both were skipped: the "corrupt" character count
+  equalled the correct **byte** count, and a value the server had just acknowledged
+  as correct still read as damaged. **When two witnesses disagree about stored data,
+  distrust the one with a locale in its path**, and re-read before reporting damage.
 
 The test: name the observation that would look different if the treatment had
 never been applied. If every number in your table survives that question
 unchanged, you have not run an experiment.
+
+---
+
+## 13. A Documented Limitation Is Still A Defect
+
+**Writing the caveat is not handling it.**
+
+The daily cron here was `0 16 * * *`, and `wrangler.jsonc`, `src/index.ts` and the README
+each carried a comment saying Cron Triggers are UTC only and this becomes 05:00 NZDT in
+September. Three files agreed about the problem. Nothing fixed it for nine days, because
+the comment made it feel handled — and six weeks out it was a run at the wrong hour for
+six months while the docs went on saying 04:00.
+
+- **A caveat in a comment is a defect with an excuse attached.** If you deleted the
+  comment, would the behaviour read as a bug? Then it is one, and it belongs in the bug
+  log with a status, not in a paragraph.
+- **Prefer the design that is testable at any time.** The first version of the fix gated
+  on the local wall-clock hour, which can only be exercised at 04:00. Keying it on the
+  **UTC offset** instead made both DST regimes testable at any hour — which is the only
+  reason a 365-day simulation exists to prove no day is skipped or doubled.
+- This is §6 for scheduled behaviour: the limit you flagged in planning is the one to
+  measure first. A date six weeks away is still a date.
 
 ---
 

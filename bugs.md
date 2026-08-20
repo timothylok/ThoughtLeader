@@ -32,6 +32,13 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [24](#bug-24--the-fresh-excerpt-window-is-a-newest-n-cut-and-it-destroyed-a-verdict) | The fresh-excerpt window is a newest-N cut, and it destroyed a verdict | 🔴 Silent research regression | ✅ **Fixed & measured** (0/8 → 3/3), deployed `15f2e432` |
 | [25](#bug-25--a-finding-is-attributed-to-a-source-that-supplied-none-of-its-content) | A finding is attributed to a source that supplied none of its content | 🔴 False attribution | **Open** — #22's invariant one branch away |
 | [26](#bug-26--eight-samples-of-a-config-experiment-that-tested-nothing) | Eight samples of a config experiment that tested nothing | 🟠 Test validity | Diagnosed; practice added |
+| [27](#bug-27--the-event-ledger-deduped-on-a-field-that-is-usually-absent) | The event ledger deduped on a field that is usually absent | 🟠 Data integrity | Fixed |
+| [28](#bug-28--the-report-announced-already-recorded-events-as-new) | The report announced already-recorded events as new | 🟠 False delta | Fixed |
+| [29](#bug-29--a-seed-was-validated-for-shape-and-never-for-content) | A seed was validated for shape and never for content | 🟡 Wasted iteration | Fixed |
+| [30](#bug-30--no-divergence-and-never-measured-printed-as-the-same-word) | "No divergence" and "never measured" printed as the same word | 🟠 Silent false negative | Fixed |
+| [31](#bug-31--the-daily-run-was-scheduled-to-drift-an-hour-in-six-weeks) | The daily run was scheduled to drift an hour in six weeks | 🟡 Latent schedule drift | ✅ **Fixed & simulated** (`3602f68b`) |
+| [32](#bug-32--a-locale-decoded-pipe-reported-clean-utf-8-as-corrupt) | A locale-decoded pipe reported clean UTF-8 as corrupt | 🟠 False diagnosis | Diagnosed; practice added |
+| [33](#bug-33--every-write-endpoint-was-open-to-anyone-holding-the-url) | Every write endpoint was open to anyone holding the URL | 🔴 Unauthenticated spend | ✅ **Fixed & verified** (`79b9bd95`) |
 
 ---
 
@@ -1705,3 +1712,125 @@ surface in search are aggregator pages citing nothing. Writing those numbers dow
 have reproduced this very bug one section over.
 
 ---
+
+---
+
+## Bug 31 — The daily run was scheduled to drift an hour in six weeks
+
+**Found:** 2026-08-20, converting run timestamps to NZST.
+**Severity:** 🟡 Latent schedule drift · **Status:** ✅ **Fixed 2026-08-20**, deployed `3602f68b`
+
+`0 16 * * *` was chosen as "04:00 NZST" and documented as such in three places. Cron
+Triggers are **UTC only**, so on **2026-09-27** the same expression becomes 05:00 NZDT,
+and back to 04:00 on 2027-04-04. Nothing breaks; the run simply happens at the wrong hour
+for six months at a time, while the README goes on saying 04:00.
+
+This one was never hidden — `wrangler.jsonc`, `src/index.ts` and the README all carried a
+comment saying it drifts. **A limitation written down is still a defect if the design
+depends on the value being right.** It sat for nine days because it was documented rather
+than fixed.
+
+**Fixed** by registering both arms and running exactly one. `scheduled()` starts a run
+only on the arm equal to `dailyCronFor(controller.scheduledTime)` — the expression that is
+04:00 in `Pacific/Auckland` for that instant.
+
+- `scheduledTime`, not `Date.now()`: the arm is a property of the instant scheduled, so an
+  invocation lagging across an hour boundary cannot select the wrong one.
+- The offset is read via `Intl` `longOffset` and **throws** if unparseable. An unreadable
+  offset silently becoming UTC would move the run twelve hours (§10).
+- If no registered arm matches, both arms alert to Discord. A day with no research must
+  not cost one log line.
+
+**Verified two ways.** Simulating both arms across 365 UTC days gives **365 distinct local
+days, every start at 04:00** — no skipped day in September, no double run in April. Then
+the shipped handler under `wrangler dev --remote --test-scheduled` was fired on the NZDT
+arm and printed the arm it computed **from inside the code path** (§12):
+
+```
+[daily] "0 15 * * *" is the off-DST arm today (want "0 16 * * *"); skipping
+```
+
+The matching arm was deliberately not fired — the day was unclaimed, so it would have
+started a real run.
+
+**The invariant:** *exactly one arm starts a run per local day, and it starts at 04:00
+local.* Both halves need checking; an arm-selection rule that is right about "which" and
+wrong about "when" passes any test that only counts runs.
+
+---
+
+## Bug 32 — A locale-decoded pipe reported clean UTF-8 as corrupt
+
+**Found:** 2026-08-20, verifying the baseline in D1. **Severity:** 🟠 False diagnosis
+**Status:** Diagnosed; practice added. **No code was wrong.**
+
+`GET /baseline` was read as 6,501 characters of mojibake — `â€"` for every em dash, and the
+same on `·  →  ±  −  ⅓  ×` — against a committed file of 6,434 chars hashing to `d18d6d14…`.
+Reported as corrupted data in D1, with the arrows in the **baseline's own figures**
+(`$11.0M → $12.5M`) as the damage.
+
+The stored value was correct the whole time. `json.load(sys.stdin)` decodes the pipe with
+the **locale** codec — cp1252 on this machine — not UTF-8. Round-tripping
+`live.encode('cp1252').decode('utf-8')` reproduced the committed file exactly.
+
+**The tell was there before the diagnosis:** the "corrupt" character count (6,501) was
+exactly the **byte** count of the correct file. Two numbers that should not match, matching.
+
+**What settled it** was the re-post. The body was `ensure_ascii` JSON, the Worker
+acknowledged `chars: 6434` — and the same read still reported 6,501 mojibake chars
+*afterwards*. A value provably correct in D1, read as corrupt. At that point the instrument
+is the only suspect left.
+
+```sh
+# Right: bytes in, explicit decode, hash compared against the file
+curl -s "$WORKER_URL/baseline" | python -c "
+import json,sys,hashlib
+live = json.loads(sys.stdin.buffer.read().decode('utf-8'))['baseline']
+print(len(live), hashlib.sha256(live.encode('utf-8')).hexdigest())"
+```
+
+**This is §12 pointed at the reader.** The rule there — *report the effective setting from
+inside the code path, not from the launcher* — assumed the instrument was neutral. It is
+not: a locale-decoded read is a second witness in the chain, and it fails by producing
+plausible wrong output rather than an error. **When two witnesses disagree about stored
+data, distrust the one with a locale in its path**, and re-read before believing damage.
+
+---
+
+## Bug 33 — Every write endpoint was open to anyone holding the URL
+
+**Found:** 2026-08-20, deciding whether README and HANDOFF could be committed to a public
+repo. **Severity:** 🔴 Unauthenticated spend and data loss · **Status:** ✅ **Fixed and
+verified 2026-08-20**, live `79b9bd95`
+
+`POST /start`, `/stop`, `/baseline` and `/step` took no credential. Anyone with the
+`workers.dev` URL could start runs against the free neuron allocation, stop the daily run,
+or overwrite the baseline every delta is measured against. The only thing between those
+endpoints and the internet was that the URL was kept out of the repo — which is why
+`README.md`, `HANDOFF.md`, `liverun.html` and two others were gitignored, and why the URL
+appearing in a file was treated as the whole of the risk.
+
+**Fixed** with a shared secret checked once, before the switch in `fetch()`, keyed the way
+the switch is keyed so a new route is checked against one list.
+
+**The set is "writes or spends", not "is a POST".** `GET /search` is in it: it mutates
+nothing, but `recall` embeds the query, and an AI call is a write to the neuron budget —
+the same call site the spend guard forgot in #17. Reads stay open because `liverun.html`
+polls `/state` and `/usage` from `file://` and neither costs anything.
+
+**An unset secret denies.** `if (!env.CONTROL_TOKEN) return false`. "Not configured" must
+not read as "not required" — a fail-open default here would pass every test that sends the
+token, which is every test anyone writes.
+
+**Tested by triggering the deny path, not the allow path** (§7). The code was deployed
+**before** the secret existed, and production answered **401 to a correct client token**.
+Then 12 cases on a remote dev server and 8 in production: no header, wrong token, and
+correct-token-plus-one-character all deny — the last is what proves the length check and
+`timingSafeEqual` rather than a prefix match. The denied `POST /baseline {"text":"HACKED"}`
+attempts ran against **real D1**: the baseline still hashes to `d18d6d14…`, spend is 0, no
+run was started.
+
+**The invariant:** *every route that writes a row or spends a neuron requires the token,
+and an absent token denies.* Crons sit outside it by construction — they enter through
+`scheduled()`, not `fetch()` — and no source file reads `WORKER_URL`, so the Worker never
+calls itself.

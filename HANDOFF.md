@@ -1,11 +1,31 @@
 # Session handoff — session 9, 2026-08-20
 
+## Where things stand — 2026-08-20 19:30 NZST
+
+**Live:** `$WORKER_URL` (see local `.env`) · version **`79b9bd95`** (2026-08-20 18:57 NZST,
+a Secret Change over the code in `c40fa659`) · `tsc --noEmit` clean · 40/40 tests pass ·
+repo, deployment and GitHub in sync at `b398f81` · **nothing in flight**.
+
+**Crons:** `*/30 * * * *` watchdog · `0 15 * * *` **and** `0 16 * * *` daily run — both
+fire, only the arm that is 04:00 in `Pacific/Auckland` starts anything. Next run
+**2026-08-21 04:00 NZST**, on the `0 16` arm; the `0 15` arm takes over on 27 Sep.
+
+**Secrets:** `ALERT_WEBHOOK` → Discord · `CONTROL_TOKEN` → the write/spend routes. Both
+set; the token was verified from outside, including with the secret deliberately unset.
+
+**Baseline:** `baseline/AU-AI-FUNDING-2026H1.md` — 6,434 chars, `d18d6d14…`, byte-identical
+in D1. Read it back with an explicit UTF-8 decode, never through a locale-decoded pipe.
+
+**Ledger:** 4 events. **Spend:** 0 neurons on UTC 2026-08-20 against a 10,000 budget.
+
+*Older "Where things stand" blocks below are the state of their own session, not this one.*
+
 **The baseline existed only as a plan. `GET /baseline` returned `""`.** Every delta report
 to date printed `## Divergence from baseline → None.`, which reads as *checked and clean*
 and meant *nothing to check against*. Both halves fixed this session: the report no longer
 fakes the measurement, and the baseline now exists.
 
-## The write endpoints now require `CONTROL_TOKEN` — deployed `c40fa659`
+## The write endpoints now require `CONTROL_TOKEN` — code `c40fa659`, live `79b9bd95`
 
 The repo is public and `POST /start`, `/stop`, `/baseline`, `/step` were open to anyone
 holding the URL. One gate before the switch in `fetch()`, keyed the way the switch is

@@ -782,7 +782,7 @@ the volume and carry most of the value.
 | D1 database | `research-log` — id in `wrangler.jsonc` |
 | Account ID | `$CF_ACCOUNT_ID` — see local `.env`; needed only for dashboard links |
 | Crons | `*/30 * * * *` (watchdog) · `0 16 * * *` + `0 15 * * *` (daily run — both fire, only the 04:00 `Pacific/Auckland` arm starts) |
-| Secrets | `ALERT_WEBHOOK` — failure alerts; unset = silently disabled |
+| Secrets | `ALERT_WEBHOOK` — failure alerts; unset = silently disabled · `CONTROL_TOKEN` — required by the write/spend routes; **unset denies them** |
 | First deployed | 2026-08-11 |
 
 ### 5.2 Reconciling neuron spend against Cloudflare
