@@ -125,19 +125,71 @@ export default {
 
   /**
    * Cron Triggers land here. Cloudflare schedules them in **UTC only** — there
-   * is no local-time or DST handling, so a fixed expression drifts by an hour
-   * against NZ local time between NZST and NZDT.
+   * is no local-time or DST handling, so a single expression drifts by an hour
+   * against NZ local time between NZST (UTC+12) and NZDT (UTC+13).
+   *
+   * Both daily arms are registered and both fire every day. Exactly one of them
+   * is `DAILY_LOCAL_HOUR` in `DAILY_TZ` for the instant being scheduled; the
+   * other returns without starting anything.
    */
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
-    if (controller.cron === DAILY_CRON) return await startDailyRun(env);
-    return await watchdog(env);
+    if (!DAILY_CRONS.includes(controller.cron)) return await watchdog(env);
+
+    // scheduledTime, not Date.now(): the arm is a property of the instant the
+    // cron was scheduled for, and invocation can lag across an hour boundary.
+    const want = dailyCronFor(controller.scheduledTime);
+
+    if (!DAILY_CRONS.includes(want)) {
+      // No registered arm lands on the target local hour, so no arm will ever
+      // start a run. Silence here is a day with no research and one log line.
+      console.error(`[daily] no registered cron is ${DAILY_LOCAL_HOUR}:00 in ${DAILY_TZ}; wanted "${want}"`);
+      await alert(
+        env,
+        'daily run did NOT start',
+        `No cron arm matches "${want}" — the ${DAILY_TZ} UTC offset moved off the hour. ` +
+          `Registered: ${DAILY_CRONS.join(', ')}.`,
+      );
+      return;
+    }
+    if (controller.cron !== want) {
+      console.log(`[daily] "${controller.cron}" is the off-DST arm today (want "${want}"); skipping`);
+      return;
+    }
+    return await startDailyRun(env);
   },
 } satisfies ExportedHandler<Env>;
 
 // --- scheduled work --------------------------------------------------------
 
-/** Must match `triggers.crons` in wrangler.jsonc exactly, or it never fires. */
-const DAILY_CRON = '0 16 * * *';
+/** Must match `triggers.crons` in wrangler.jsonc exactly, or they never fire. */
+const DAILY_CRONS = ['0 15 * * *', '0 16 * * *'];
+const DAILY_TZ = 'Pacific/Auckland';
+const DAILY_LOCAL_HOUR = 4;
+
+/**
+ * UTC offset of `tz` at `at`, in minutes. Throws rather than guessing: an
+ * unreadable offset must not silently become UTC and move the run 12 hours.
+ */
+function utcOffsetMinutes(tz: string, at: number): number {
+  const name =
+    new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'longOffset' })
+      .formatToParts(at)
+      .find((p) => p.type === 'timeZoneName')?.value ?? '';
+  const m = /^GMT([+-])(\d{2}):(\d{2})$/.exec(name);
+  if (!m) throw new Error(`cannot read UTC offset for ${tz}: "${name}"`);
+  return (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3]));
+}
+
+/**
+ * The cron expression that is `DAILY_LOCAL_HOUR` in `DAILY_TZ` at `at`. A zone
+ * on a non-whole-hour offset yields an expression matching no arm — handled by
+ * the caller, loudly, rather than rounded into the wrong hour.
+ */
+export function dailyCronFor(at: number): string {
+  const utcHour = (24 + DAILY_LOCAL_HOUR - utcOffsetMinutes(DAILY_TZ, at) / 60) % 24;
+  return `0 ${utcHour} * * *`;
+}
+
 const DAILY_BRIEF_KEY = 'daily_brief';
 const DAILY_LAST_RUN_KEY = 'daily_last_run';
 

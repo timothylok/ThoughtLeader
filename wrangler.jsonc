@@ -42,15 +42,20 @@
   ],
 
   "triggers": {
-    // Cron Triggers are UTC ONLY — no local time, no DST. These drift by an
-    // hour against NZ time between NZST (UTC+12) and NZDT (UTC+13).
+    // Cron Triggers are UTC ONLY — no local time, no DST. A single daily
+    // expression drifts by an hour against NZ time between NZST (UTC+12) and
+    // NZDT (UTC+13), so BOTH daily arms are registered and fire every day.
+    // src/index.ts picks the one that is 04:00 in Pacific/Auckland for the
+    // instant scheduled and the other returns immediately — so the run stays
+    // at 04:00 local across the DST boundary.
     //
     // */30  watchdog: restarts runs stalled for >2h with work still queued.
-    // 0 16  daily research run from control['daily_brief'] (src/index.ts
-    //       DAILY_CRON must match this string exactly or it never fires).
-    //       16:00Z = 04:00 NZST; a 6-iteration run at ITERATION_INTERVAL=18min
-    //       takes ~1.8h, so the report is written by ~05:50 NZST.
-    "crons": ["*/30 * * * *", "0 16 * * *"]
+    // 0 15  daily research run — the NZDT arm (15:00Z = 04:00 NZDT).
+    // 0 16  daily research run — the NZST arm (16:00Z = 04:00 NZST).
+    //       Both must match src/index.ts DAILY_CRONS exactly or they never
+    //       fire. A 6-iteration run at ITERATION_INTERVAL=18min takes ~1.8h,
+    //       so the report is written by ~05:50 local either way.
+    "crons": ["*/30 * * * *", "0 15 * * *", "0 16 * * *"]
   },
 
   "vars": {
