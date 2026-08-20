@@ -87,8 +87,22 @@ bug log in `bugs.md`. These are not general advice — each one cost real time h
   Check the extracted text against the source's *stated purpose*, not just its length;
   a large character count reads as success and hides this completely.
 
+- **The brief is a source, and it is the one never probed.** A plan can assert that data
+  exists as confidently as it asserts a fact. Here B2 — "most active investors in
+  Australian AI, by deal count" — was carried through eight runs, a benchmark and a
+  decision record before anyone checked whether *any* source publishes that ranking. None
+  does. Worse, the wrong side had already been diagnosed: the ledger's investor coverage
+  was 2 of 4 rows, so a workstream was queued to improve extraction, when at 4 of 4 there
+  would still have been nothing to compare against. **Before building the thing that
+  produces one side of a comparison, fetch the other side.** One search cancelled the
+  workstream.
+- **Where no source exists, write NOT MEASURED into the artefact and say what not to
+  conclude.** Filling the gap from whatever ranked lists exist puts an unfalsifiable
+  number where a measurement belongs — §10 in a document instead of in a guard.
+
 The test: could you name the exact command that proved this source works? And a second
-command that proved it is about what you think it is?
+command that proved it is about what you think it is? And for anything your plan compares
+against — the command that proved the other side exists at all?
 
 ## 6. Measure The Limit That Scares You — First
 

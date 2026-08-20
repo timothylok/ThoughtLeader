@@ -682,3 +682,136 @@ in session 4 were one signature seen four times.
 - Left `"FRESH_EXCERPTS": "11"` in `wrangler.jsonc` during the experiment. Harmless because
   nothing was deployed, but it is precisely the shape of §7.1's near-miss, and it only
   stayed harmless because the deploy gate is a habit rather than a reminder.
+
+---
+
+## 12. Addendum — sessions 6-9, 2026-08-18 to 2026-08-20
+
+Four sessions in which the loop stopped trying to answer a research question and started
+tracking change, because the evidence said it could never do the first one.
+
+### The brief was the bug
+
+Eight production runs, and goal 1 ("which sectors, and which are growing fastest") scored
+Unanswered / Partial / Answered / Unanswered x3 / Partial x2. Goal 2 was **Partial six
+runs running** and never once reached Answered.
+
+The reflex reading is that the loop is weak. The actual cause was visible in the goal text
+the whole time:
+
+| clause | kind of answer | outcome |
+|---|---|---|
+| "most active investors in Australian AI" | distribution | never answered |
+| "typical stages" | distribution | never answered |
+| "notable recent rounds" | instance | answered every run |
+
+**A goal that mixes two tiers cannot be scored by either.** Every loop success across
+eight runs was an instance — a named company, a dollar figure, a URL. Every failure was an
+aggregate. Six Partials in a row was not a research result; it was the brief describing
+two jobs and grading them as one.
+
+So the brief split (`benchmark/AU-BRIEF-DECISION.md`): Claude Code writes a monthly
+**baseline** of distributions; the loop runs daily and reports **deltas** against it. This
+is CLAUDE.md §8 — fast expensive path to design and validate, slow cheap path to execute
+repeatedly — applied to the brief itself, which was the one place it had never been
+applied.
+
+**Churn inverts under this design.** Session 6 concluded that "churn against a fixed
+window is a liability", which was true *while the loop re-derived its answer daily*.
+Startup Daily holds 10 items and replaced 9 of them in 43 hours; under re-derivation that
+destroyed a verdict (bugs.md #24). Under capture-to-ledger it is simply five events a day
+arriving on schedule, and eviction stops mattering because nothing needs to still be there
+tomorrow.
+
+### Identity is not similarity
+
+Change detection needed a second kind of memory, and the first instinct — persist the
+Vectorize index across runs — was wrong. Recall's top-8 answers *"what is related to
+this?"*. The question is *"have I already reported this?"*, which is **identity**: a
+`UNIQUE(key)` row and `ON CONFLICT DO NOTHING`. A similarity index cannot answer it — two
+reports of one round score high against each other, and so do two different rounds by the
+same investor. Cheaper and more correct, which is a rarer combination than it sounds.
+
+Keying it took two attempts, and the second was decided by measurement rather than by
+argument. `company + stage` was the intuition; the first live run showed **stage present on
+2 of 4 rows and amount on 4 of 4** (#27). A key on a field that is usually absent collapses
+every stageless round by one company into one row *and* splits a round the moment a second
+source happens to say "Seed".
+
+### The model cannot be asked to know what it was never told
+
+Three defects in this stretch share one shape. On the first delta run the model re-offered
+an event it had just been shown under `ALREADY RECORDED`; the `UNIQUE` constraint rejected
+the row, and the finding still described it (#28). Only the insert knows what was novel,
+and no prompt can convey that.
+
+The fix was structural, not textual: the report's "New events" section is now rendered from
+`eventsForRun()` in code, and the model is handed the answer rather than asked for it. The
+same move settled #25 — attribution moved from a URL the model writes to an `[S1]` marker
+the server resolves, which is `selectNextSources`'s trust model generalised. **Fabrication
+made impossible by construction beats fabrication forbidden by instruction**, and by this
+point instruction had lost on this surface three times.
+
+### "None" and "never measured" were the same word
+
+`control.baseline` was the empty string for both delta runs, so the report printed
+`Divergence from baseline: None.` — which reads as *checked and clean* and meant *nothing
+to check against* (#30). Worse, a run producing no findings at all still emitted it.
+
+This is §10 exactly, moved out of the spend guard and into the deliverable. `?? 0` made
+"unmeasurable" and "free" the same number; an empty baseline made "not measured" and
+"clean" the same word. **Neither can ever raise an alarm.** The §10 test — name the case
+where this reads wrong without failing — has the same answer both times: every case.
+
+### The gap was in the plan, not in the extractor
+
+The most useful thing in these four sessions was a workstream that got cancelled.
+
+Session 7 deferred the baseline pass with a reason that sounded rigorous: the ledger's
+stage and investor coverage was 2 of 4 rows, so B2 ("most active investors") was "not
+comparable yet", and extraction should be improved first. Then the baseline pass ran and
+found that **no source ranks Australian investors by deal count** — not Cut Through
+Venture, across its entire published catalogue. The ranked lists that surface in search are
+aggregator pages whose counts cite nothing.
+
+At 4-of-4 extraction coverage there would still have been nothing on the other side of the
+comparison. The diagnosis had pointed at the side that was cheap to inspect.
+
+**Before building the thing that produces one side of a comparison, fetch the other side.**
+One search would have cancelled a planned workstream. This is §5 aimed at your own brief,
+which is the one source that never gets probed because it does not look like a source.
+
+B2 is now recorded in the baseline as **NOT MEASURED**, with an explicit instruction not to
+flag investor divergence. Filling it from what was available would have reproduced #30 one
+section over — a number that cannot raise an alarm, sitting where a measurement should be.
+
+### What a baseline has to do that a summary does not
+
+It has to be **diverged from**, and that imposes rules a prose write-up escapes:
+
+- **Shares, not only dollars.** Quarters differ in size. AI models and data infrastructure
+  went $100M to $730M across Q1 to Q2 2026, which is 5.6% to 42.6% *of the quarter*. The
+  second pair is what a single daily event can contradict.
+- **Constructed numbers labelled as constructed.** The round-size bounds are one-third to
+  three times a published median, because no source publishes ranges; Q4 2025 is a
+  subtraction carrying about $400M of error because three different CY2025 totals
+  circulate. Unlabelled, both read as measurements within a month.
+- **Coverage limits stated inline.** Q1 2026's sector list is a top ten summing to $1.63B
+  of a stated $1.8B, so "not listed" means *below $76M*, not zero. A baseline that omitted
+  this would manufacture a divergence every week, and every one would look real.
+
+### What I got wrong in this stretch
+
+- **Added a source on shape and never on content** (#29). `smartcompany.com.au/feed`
+  extracts perfectly — 18,718 characters — and carries no funding events at all: a Google
+  Drive outage, an Easter public holiday, AirPods, a store opening. The loop correctly
+  reported "nothing new" and was right; the source was wrong. §5 verbatim, one session
+  after §5 was written down.
+- **Deferred the baseline pass twice with a reason that was the wrong diagnosis** — see
+  above. It sounded like rigour and was measured from the wrong side.
+- **Nearly wrote a migration that reimplemented the key it migrated to.** A migration that
+  reimplements its target key agrees with itself and disagrees with production; it imports
+  the Worker's own `eventKey` instead.
+- **Lost the test suite to a cleared scratchpad** between sessions and had to rewrite it.
+  Tests that live outside the repo are not tests. `npm test` — 40 assertions — is now in
+  the repo.
