@@ -21,7 +21,13 @@ import {
   parseB3Bands,
   checkRoundSizes,
   renderB3Section,
+  renderEventSection,
+  parseBaselineCountry,
+  normCountry,
+  countryLabel,
+  UNKNOWN_COUNTRY,
   B3_HEADING,
+  EVENTS_HEADING,
   leakedCompanies,
   REPORT_SYSTEM,
 } from '../src/prompt.ts';
@@ -95,7 +101,7 @@ const ec = citableSources(SD, [{ text: 'x', score: 0.9, sourceUrl: TC, type: 'ch
 eq('events: full line parses every field',
   parseEvents(['Sophiie AI | construction | $5m | Seed | Blackbird | 2026-08-17 | [S1]'], ec)[0], {
     key: 'sophiieai|5000000', company: 'Sophiie AI', sector: 'construction', amount: '$5m',
-    stage: 'Seed', investors: 'Blackbird', eventDate: '2026-08-17', sourceUrl: SD,
+    stage: 'Seed', investors: 'Blackbird', eventDate: '2026-08-17', country: 'unknown', sourceUrl: SD,
     raw: 'Sophiie AI | construction | $5m | Seed | Blackbird | 2026-08-17 | [S1]' });
 eq('events: the marker picks the source, not the position',
   parseEvents(['Farmbot | agtech | $22m | Series B | - | - | [S2]'], ec)[0].sourceUrl, TC);
@@ -180,7 +186,11 @@ const BASELINE = readFileSync(
 );
 const BANDS = parseB3Bands(BASELINE);
 const seedBand = BANDS.find((b) => b.stage.toLowerCase() === 'seed');
-const statuses = (rows) => checkRoundSizes(rows, BANDS).map((v) => v.status);
+const AU = parseBaselineCountry(BASELINE);
+// Rows default to AU so the pre-existing cases below still exercise the stage
+// logic; a case about country overrides it.
+const statuses = (rows) =>
+  checkRoundSizes(rows.map((r) => ({ country: 'AU', ...r })), BANDS, AU).map((v) => v.status);
 
 eq('b3: the live baseline yields four bands', BANDS.length, 4);
 eq('b3: it reads the FLAG table, not the median table above it',
@@ -204,12 +214,14 @@ eq('b3: under the floor is flagged too',
 eq('b3: the bounds are exclusive — exactly on the flag is within',
   statuses([{ company: 'X', amount: '$12m', stage: 'Seed' }]), ['within']);
 eq('b3: pre-seed does NOT fall through to the Seed band',
-  checkRoundSizes([{ company: 'X', amount: '$2 million', stage: 'Pre-Seed' }], BANDS)[0].band.stage,
+  checkRoundSizes([{ company: 'X', amount: '$2 million', stage: 'Pre-Seed', country: 'AU' }],
+    BANDS, AU)[0].band.stage,
   'Angel / Pre-Seed');
 eq('b3: $5m Pre-Seed is ABOVE its own $3.9M flag though inside Seed range',
   statuses([{ company: 'X', amount: '$5 million', stage: 'Pre-Seed' }]), ['above']);
 eq('b3: Series C maps onto Series B+',
-  checkRoundSizes([{ company: 'X', amount: '$50m', stage: 'Series C' }], BANDS)[0].band.stage,
+  checkRoundSizes([{ company: 'X', amount: '$50m', stage: 'Series C', country: 'AU' }],
+    BANDS, AU)[0].band.stage,
   'Series B+');
 eq('b3: an unparseable amount is not checked, not zero',
   statuses([{ company: 'X', amount: 'an undisclosed sum', stage: 'Seed' }]), ['no-amount']);
@@ -217,15 +229,16 @@ eq('b3: a stage that is no B3 row is not checked',
   statuses([{ company: 'X', amount: '$3m', stage: 'Growth' }]), ['unmapped-stage']);
 
 eq('b3: an unreadable table prints NOT CHECKED, never an empty clean list',
-  renderB3Section([], [], true).includes('NOT CHECKED'), true);
+  renderB3Section([], [], true, AU).includes('NOT CHECKED'), true);
 eq('b3: no baseline prints "not measured", not "none"',
-  renderB3Section([], [], false).includes('Not measured'), true);
+  renderB3Section([], [], false, AU).includes('Not measured'), true);
 eq('b3: no events to check is not the same sentence as nothing breached',
-  renderB3Section([], BANDS, true).includes('No new events to check'), true);
+  renderB3Section([], BANDS, true, AU).includes('No new events to check'), true);
 eq('b3: the breach line quotes the baseline own bound',
   renderB3Section(
-    checkRoundSizes([{ company: 'Nybro', amount: '$20 million', stage: 'Seed' }], BANDS),
-    BANDS, true).includes('ABOVE** the $12.0M flag for Seed'), true);
+    checkRoundSizes([{ company: 'Nybro', amount: '$20 million', stage: 'Seed', country: 'AU' }],
+      BANDS, AU),
+    BANDS, true, AU).includes('ABOVE** the $12.0M flag for Seed'), true);
 eq('b3: a model-written B3 section is removed whatever it said',
   dropSection('## ' + B3_HEADING + '\nAll rounds look fine.\n\n## Notes\nkept', B3_HEADING),
   '## Notes\nkept');
@@ -279,6 +292,97 @@ eq('notes: and it says explicitly to write nothing after',
 eq('notes: a Notes section the model writes anyway is removed',
   dropSection('## Divergence from baseline\nNone.\n\n## Notes\nNybro raised $20m.', 'Notes'),
   '## Divergence from baseline\nNone.');
+
+// ---------------------------------------------------------------------------
+// #39 — a country the baseline does not cover.
+//
+// Run 5b6594b2 recorded Vessev, an Auckland company the feed's own headline
+// calls "Kiwi", and the report cleared its $27M Series A as "within
+// $6.2M–$55.8M" — an Australian band, over a New Zealand round. #36 closed the
+// same hole along the STAGE dimension; this is the country dimension of the
+// same invariant: NOTHING is checked against a baseline that does not cover it.
+// ---------------------------------------------------------------------------
+eq('country: AU spellings collapse onto one bucket',
+  ['Australia', 'australian', 'AU', 'aus'].map(normCountry), ['AU', 'AU', 'AU', 'AU']);
+eq('country: NZ spellings collapse onto one bucket, "Kiwi" included',
+  ['New Zealand', 'NZ', 'aotearoa', 'Kiwi'].map(normCountry), ['NZ', 'NZ', 'NZ', 'NZ']);
+eq('country: US spellings collapse, so the third bucket does not split three ways',
+  ['United States', 'USA', 'us'].map(normCountry), ['US', 'US', 'US']);
+eq('country: THE DEFAULT THAT MATTERS — absent is "unknown", never the baseline country',
+  [normCountry(null), normCountry(''), normCountry('   ')],
+  [UNKNOWN_COUNTRY, UNKNOWN_COUNTRY, UNKNOWN_COUNTRY]);
+eq('country: anything else keeps its own bucket verbatim',
+  normCountry('Singapore'), 'Singapore');
+eq('country: the label is what the report prints',
+  [countryLabel('AU'), countryLabel('NZ'), countryLabel('Singapore'), countryLabel(UNKNOWN_COUNTRY)],
+  ['Australia', 'New Zealand', 'Singapore', 'Country not stated']);
+
+eq('events: a seventh field is read as the country',
+  parseEvents(['Vessev | electric ferry | $27m | Series A | - | - | New Zealand | [S1]'], ec)[0].country,
+  'NZ');
+eq('events: A SIX-FIELD LINE STILL PARSES — country appended, not inserted',
+  parseEvents(['Bower | science research | $2m | pre-Seed | - | - | [S1]'], ec)[0],
+  { key: 'bower|2000000', company: 'Bower', sector: 'science research', amount: '$2m',
+    stage: 'pre-Seed', investors: null, eventDate: null, country: 'unknown', sourceUrl: SD,
+    raw: 'Bower | science research | $2m | pre-Seed | - | - | [S1]' });
+eq('events: "-" in the country field is unknown, not the literal string',
+  parseEvents(['X | ai | $1m | Seed | - | - | - | [S1]'], ec)[0].country, UNKNOWN_COUNTRY);
+
+eq('baseline: the live document declares the country it covers', AU, 'AU');
+eq('baseline: a document with no declaration yields null, not a guess',
+  parseBaselineCountry('# Some baseline\n\nNo coverage line here.'), null);
+eq('baseline: null document yields null', parseBaselineCountry(null), null);
+
+// The exact row that was wrongly cleared, as the ledger holds it.
+eq('b3: THE MISS — an NZ Series A is NOT checked against the AU band',
+  statuses([{ company: 'Vessev', amount: '$27 million', stage: 'Series A', country: 'NZ' }]),
+  ['other-country']);
+eq('b3: and the AU round beside it that day is still checked',
+  statuses([{ company: 'Bower', amount: '$2 million', stage: 'pre-Seed', country: 'AU' }]),
+  ['within']);
+eq('b3: an UNCLASSIFIED row is not checked either — the safe direction',
+  statuses([{ company: 'X', amount: '$27 million', stage: 'Series A', country: UNKNOWN_COUNTRY }]),
+  ['other-country']);
+eq('b3: country is the OUTERMOST gate — an NZ round that would breach is still not checked',
+  statuses([{ company: 'X', amount: '$500 million', stage: 'Seed', country: 'NZ' }]),
+  ['other-country']);
+eq('b3: the line says NOT MEASURED and names the country the baseline does cover',
+  renderB3Section(
+    checkRoundSizes([{ company: 'Vessev', amount: '$27 million', stage: 'Series A', country: 'NZ' }],
+      BANDS, AU),
+    BANDS, true, AU),
+  '## ' + B3_HEADING +
+    '\n* Vessev — $27 million (New Zealand): NOT MEASURED — the baseline covers Australia only.');
+eq('b3: a baseline that declares no country checks NOTHING, and says so',
+  renderB3Section(
+    checkRoundSizes([{ company: 'X', amount: '$5m', stage: 'Seed', country: 'AU' }], BANDS, null),
+    BANDS, true, null).includes('does not declare which country'), true);
+
+// --- the report section ----------------------------------------------------
+const row = (company, country, amount) => ({
+  company, sector: 'x', amount, stage: null, investors: null,
+  event_date: null, source_url: SD, country,
+});
+
+eq('events section: the baseline country leads, the rest follow, unknown is last',
+  renderEventSection(
+    [row('C', UNKNOWN_COUNTRY, '$3m'), row('B', 'NZ', '$2m'), row('A', 'AU', '$1m')], AU)
+    .split('\n').filter((l) => l.startsWith('**')),
+  ['**Australia**', '**New Zealand**', '**Country not stated**']);
+eq('events section: the label prints even when every row is in one bucket',
+  renderEventSection([row('A', 'AU', '$1m')], AU).includes('**Australia**'), true);
+eq('events section: a NULL country from a pre-column row still buckets, never silently AU',
+  renderEventSection([row('A', null, '$1m')], AU).includes('**Country not stated**'), true);
+eq('events section: an empty day is still "None today."',
+  renderEventSection([], AU), '## ' + EVENTS_HEADING + '\nNone today.');
+eq('events section: THE 5b6594b2 REPORT, as it should have read',
+  renderEventSection([row('Vessev', 'NZ', '$27 million'), row('Bower', 'AU', '$2 million')], AU),
+  '## ' + EVENTS_HEADING +
+    '\n**Australia**\n* Bower — x, $2 million ' + SD +
+    '\n\n**New Zealand**\n* Vessev — x, $27 million ' + SD);
+
+eq('report prompt: the model is told the baseline covers one country',
+  REPORT_SYSTEM.includes('baseline covers ONE country'), true);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

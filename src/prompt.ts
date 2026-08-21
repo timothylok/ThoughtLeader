@@ -14,8 +14,9 @@ Rules:
 - Answer the goal that was actually asked. If a goal names particular things (cities, sectors, categories), address those things — do not substitute a different one.
 - Do not repeat a prior finding. Advance the research or name what is still missing.
 - RECORD EVERY FUNDING EVENT in the new material as one line in "events":
-  "company | sector | amount | stage | investors | date | [S#]"
+  "company | sector | amount | stage | investors | date | country | [S#]"
   Use "-" for any field the material does not state. The marker is required. One line per event.
+- COUNTRY is where the company is based, as the material states it: "Australia", "New Zealand", "United States". Read it from the text — a "Kiwi" startup, or one based in Auckland or Wellington, is New Zealand and not Australia; Sydney, Melbourne, Brisbane, Perth and Canberra are Australia. If the material does not say and you cannot tell from it, write "-". An absence is handled; a guess is not, because each country is bucketed and compared separately and the wrong bucket is a false comparison.
 - AN EVENT WITHOUT AN AMOUNT IS NOT RECORDABLE. If the material names a company but does not say how much it received, leave it out entirely — a roundup that lists eight companies without their amounts yields no events.
 - A FUNDING EVENT IS MONEY A COMPANY HAS RECEIVED: a completed raise, round or grant. These are NOT funding events and must never be recorded:
   a valuation or a change in one; a company SEEKING or TARGETING a raise that has not closed; an IPO plan; revenue, market size or fund size; an acquisition price. If the amount would be negative, it is not a funding event.
@@ -23,13 +24,14 @@ Rules:
 - Events listed under ALREADY RECORDED are known. Leave them out of "events" AND out of the finding — do not mention them at all, not even to say they are already recorded. Naming them again puts them back into memory for later iterations to recall and restate.
 - NOTHING NEW IS A VALID RESULT. If the material contains no unrecorded event, return "events": [] and a one-line finding saying so. Do NOT restate recalled material to fill the space — a finding that repeats what is already known is worse than a short one.
 - If a BASELINE is given and the material contradicts it, say so in the finding, with the marker — but ONLY about SECTOR, and only where the company's sector maps onto NO row of the baseline's taxonomy. A sector that maps onto a row under a different name is not a divergence.
+- THE BASELINE COVERS ONE COUNTRY, and it says which. A company based anywhere else is not measured against it — not its sector, not its round size, not its investors. There is no baseline for that country, which is not the same as that company being unremarkable. Record it; say nothing about how it compares.
 - NEVER judge round size against the baseline: code does that from the baseline's own table, and a round with no stage stated cannot be judged at all. NEVER flag an investor: the baseline ranks none, so an unfamiliar investor is evidence of nothing.
 - Keep the finding under 200 words.
 
 Respond with ONLY a JSON object, no prose or code fences:
 {
   "finding": "what you learned this iteration, grounded in the material, with specifics and a [S#] marker on every fact",
-  "events": ["Company | sector | amount | stage | investors | date | [S1]"],
+  "events": ["Company | sector | amount | stage | investors | date | country | [S1]"],
   "goalsAdvanced": [1],
   "progress": "which goals are now answered, which are still open",
   "newSources": ["URLs that appear in the material you were given, or []"],
@@ -238,6 +240,58 @@ export function dropSection(text: string, heading: string): string {
 export const eventKey = (company: string, amount: string | null): string =>
   `${normKey(company)}|${normAmount(amount)}`;
 
+/** An event whose country the material never stated. NOT a country. */
+export const UNKNOWN_COUNTRY = 'unknown';
+
+/**
+ * Canonical bucket for an event's country.
+ *
+ * Both sides of the baseline-scope test run through here — the ledger row's
+ * country and the country the baseline declares it covers — because
+ * canonicalisation applied to one side of a comparison is not canonicalisation
+ * (CLAUDE.md §9, bugs.md #14).
+ *
+ * An absent or unreadable country becomes UNKNOWN_COUNTRY and never AU. "I
+ * could not tell" and "Australian" must not collapse onto one value: that is
+ * how a New Zealand round came to be reported as within the Australian Series A
+ * range (bugs.md #39), and it is §10 in a column.
+ *
+ * Anything else is kept verbatim as its own bucket. The ledger records what the
+ * source said rather than a shortlist's idea of what counts.
+ */
+export function normCountry(raw: string | null): string {
+  const s = normKey(raw ?? '');
+  if (!s) return UNKNOWN_COUNTRY;
+  if (['au', 'aus', 'australia', 'australian'].includes(s)) return 'AU';
+  if (['nz', 'newzealand', 'aotearoa', 'kiwi'].includes(s)) return 'NZ';
+  if (['us', 'usa', 'unitedstates', 'unitedstatesofamerica', 'america'].includes(s)) return 'US';
+  return (raw ?? '').trim().slice(0, 40);
+}
+
+const COUNTRY_LABEL: Record<string, string> = {
+  AU: 'Australia',
+  NZ: 'New Zealand',
+  US: 'United States',
+  [UNKNOWN_COUNTRY]: 'Country not stated',
+};
+
+export const countryLabel = (code: string): string => COUNTRY_LABEL[code] ?? code;
+
+/**
+ * The country the baseline DECLARES it covers, read out of the document.
+ *
+ * Parsed, not copied, for the same reason the B3 bounds are (CLAUDE.md §14):
+ * the day someone loads a different baseline, a constant in code would go on
+ * asserting AU over it. A baseline with no declaration returns null, and the
+ * B3 section then checks nothing and says so — a table whose scope is unknown
+ * cannot clear a round.
+ */
+export function parseBaselineCountry(baseline: string | null): string | null {
+  if (!baseline) return null;
+  const m = baseline.match(/\*\*Country coverage:\s*([A-Za-z ]+?)\s*\.?\*\*/);
+  return m ? normCountry(m[1]!) : null;
+}
+
 /**
  * Turn the model's event lines into ledger rows.
  *
@@ -286,6 +340,9 @@ export function parseEvents(lines: string[], citable: Citable[]): FundingEvent[]
       stage: field(3),
       investors: field(4),
       eventDate: field(5),
+      // Appended, not inserted: a line written to the old six-field format still
+      // parses, and yields UNKNOWN_COUNTRY rather than shifting every field.
+      country: normCountry(field(6)),
       sourceUrl,
       raw: raw.slice(0, 500),
     });
@@ -487,6 +544,8 @@ The "## Round size vs baseline (B3)" section is ALSO generated for you, by code,
 ## Divergence from baseline
 Only what the findings explicitly say contradicts the baseline. If the findings say nothing of the kind, write "None."
 
+The baseline covers ONE country and the "## New events" section groups the day's events by country. A company outside the baseline's country diverges from nothing: there is no baseline for it. Do not flag it, and do not remark that it could not be compared — the code says that where it belongs.
+
 Write NOTHING after the section above — no notes, no summary, no context, no closing line. Every report that has had such a section used it to restate an event the ledger already recorded, once directly contradicting its own "None today." (bugs.md #37). If the section above is empty, a one-line report is the correct report.
 
 Rules:
@@ -596,23 +655,45 @@ function bandFor(stage: string, bands: B3Band[]): B3Band | null {
   return null;
 }
 
-export type B3Status = 'above' | 'below' | 'within' | 'no-amount' | 'no-stage' | 'unmapped-stage';
+export type B3Status =
+  | 'above'
+  | 'below'
+  | 'within'
+  | 'no-amount'
+  | 'no-stage'
+  | 'unmapped-stage'
+  | 'other-country';
 
 export interface B3Verdict {
   company: string;
   amount: string | null;
   stage: string | null;
+  country: string;
   status: B3Status;
   band: B3Band | null;
 }
 
 /** One verdict per event. Nothing is skipped — "not checkable" is a result. */
 export function checkRoundSizes(
-  events: { company: string; amount: string | null; stage: string | null }[],
+  events: { company: string; amount: string | null; stage: string | null; country: string }[],
   bands: B3Band[],
+  baselineCountry: string | null,
 ): B3Verdict[] {
   return events.map((e) => {
-    const base = { company: e.company, amount: e.amount, stage: e.stage };
+    const base = { company: e.company, amount: e.amount, stage: e.stage, country: e.country };
+    // The OUTERMOST gate, before amount or stage. B3's bounds are one country's
+    // medians, so a round raised outside it is not checkable against them at
+    // all — and "not checkable" must never render as "within range", which is
+    // how a New Zealand Series A was cleared against the Australian band
+    // (bugs.md #39). #36 closed this same hole along the stage dimension; a fix
+    // verified against the path that failed misses the path that has not
+    // (CLAUDE.md §9).
+    //
+    // UNKNOWN_COUNTRY lands here too, and that is the safe direction: an
+    // unclassified row is not silently treated as domestic.
+    if (baselineCountry === null || e.country !== baselineCountry) {
+      return { ...base, status: 'other-country' as const, band: null };
+    }
     const value = parseAmount(e.amount);
     if (value === null) return { ...base, status: 'no-amount' as const, band: null };
     // B3, verbatim: "A round with no stage stated cannot be checked against
@@ -626,6 +707,66 @@ export function checkRoundSizes(
 }
 
 export const B3_HEADING = 'Round size vs baseline (B3)';
+
+export const EVENTS_HEADING = 'New events';
+
+/**
+ * The ledger's own section, bucketed by country.
+ *
+ * Built from the LEDGER and not from the findings' prose, for the reason #28
+ * gives: only the UNIQUE(key) insert knows what was actually novel. The buckets
+ * are here rather than in the workflow so they are testable without spending
+ * neurons — and because the bucket a row prints under and the bucket B3 checks
+ * it in must be decided by the same value (CLAUDE.md §9).
+ *
+ * The label prints even when there is only one bucket. Country was invisible in
+ * this report for its whole life, which is how a New Zealand round sat in an
+ * Australian ledger being compared against Australian bands (bugs.md #39); a
+ * heading that appears only when something is unusual is a heading nobody reads
+ * when it does.
+ */
+export function renderEventSection(
+  events: {
+    company: string;
+    sector: string | null;
+    amount: string | null;
+    stage: string | null;
+    investors: string | null;
+    event_date: string | null;
+    source_url: string | null;
+    country: string | null;
+  }[],
+  baselineCountry: string | null,
+): string {
+  const head = `## ${EVENTS_HEADING}`;
+  if (events.length === 0) return `${head}\nNone today.`;
+
+  const buckets = new Map<string, typeof events>();
+  for (const e of events) {
+    const c = e.country || UNKNOWN_COUNTRY;
+    const rows = buckets.get(c);
+    if (rows) rows.push(e);
+    else buckets.set(c, [e]);
+  }
+
+  // The baseline's own country first — it is the one with something to compare
+  // against — then the rest by name, with the unclassified last.
+  const rank = (c: string): number =>
+    c === baselineCountry ? 0 : c === UNKNOWN_COUNTRY ? 2 : 1;
+  const order = [...buckets.keys()].sort(
+    (a, b) => rank(a) - rank(b) || countryLabel(a).localeCompare(countryLabel(b)),
+  );
+
+  const line = (e: (typeof events)[number]): string =>
+    `* ${e.company} — ` +
+    [e.sector, e.amount, e.stage, e.investors, e.event_date].filter(Boolean).join(', ') +
+    (e.source_url ? ` ${e.source_url}` : '');
+
+  const body = order
+    .map((c) => `**${countryLabel(c)}**\n${buckets.get(c)!.map(line).join('\n')}`)
+    .join('\n\n');
+  return `${head}\n${body}`;
+}
 
 /**
  * Companies the finding names that the prompt had already listed as recorded.
@@ -669,11 +810,15 @@ export function renderB3Section(
   verdicts: B3Verdict[],
   bands: B3Band[],
   hasBaseline: boolean,
+  baselineCountry: string | null,
 ): string {
   const head = `## ${B3_HEADING}`;
   if (!hasBaseline) return `${head}\nNot measured — no baseline recorded.`;
   if (bands.length === 0) {
     return `${head}\nNOT CHECKED — the baseline has no readable "flag below / flag above" table.`;
+  }
+  if (!baselineCountry) {
+    return `${head}\nNOT CHECKED — the baseline does not declare which country it covers.`;
   }
   if (verdicts.length === 0) return `${head}\nNo new events to check.`;
 
@@ -692,6 +837,11 @@ export function renderB3Section(
         return `${who}: stage "${v.stage}" is not a B3 row, so not checked.`;
       case 'no-amount':
         return `${who}: not checked.`;
+      case 'other-country':
+        return (
+          `${who} (${countryLabel(v.country)}): NOT MEASURED — ` +
+          `the baseline covers ${countryLabel(baselineCountry)} only.`
+        );
     }
   };
   return `${head}\n${verdicts.map(line).join('\n')}`;

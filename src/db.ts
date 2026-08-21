@@ -227,8 +227,8 @@ export async function recordEvents(
   const ts = now();
   const stmt = db.prepare(
     `INSERT INTO events
-       (key, company, sector, amount, stage, investors, event_date, source_url, raw, run_id, n, first_seen)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+       (key, company, sector, amount, stage, investors, event_date, country, source_url, raw, run_id, n, first_seen)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
      ON CONFLICT(key) DO NOTHING`,
   );
   const results = await db.batch(
@@ -241,6 +241,7 @@ export async function recordEvents(
         e.stage,
         e.investors,
         e.eventDate,
+        e.country,
         e.sourceUrl,
         e.raw,
         runId,
@@ -259,7 +260,7 @@ export async function recentEvents(
 ): Promise<FundingEventRow[]> {
   const { results } = await db
     .prepare(
-      `SELECT company, sector, amount, stage, investors, event_date, source_url, run_id, first_seen
+      `SELECT company, sector, amount, stage, investors, event_date, country, source_url, run_id, first_seen
          FROM events ORDER BY first_seen DESC LIMIT ?`,
     )
     .bind(limit)
@@ -271,7 +272,7 @@ export async function recentEvents(
 export async function eventsForRun(db: D1Database, runId: string): Promise<FundingEventRow[]> {
   const { results } = await db
     .prepare(
-      `SELECT company, sector, amount, stage, investors, event_date, source_url, run_id, first_seen
+      `SELECT company, sector, amount, stage, investors, event_date, country, source_url, run_id, first_seen
          FROM events WHERE run_id = ? ORDER BY first_seen`,
     )
     .bind(runId)
@@ -286,6 +287,10 @@ export interface FundingEventRow {
   stage: string | null;
   investors: string | null;
   event_date: string | null;
+  /** Canonical bucket. NULL only on rows written before the column existed —
+   *  and there are none: the seven that predate it were backfilled, so NULL
+   *  never has to mean both "unclassified" and "AU" (CLAUDE.md §14). */
+  country: string | null;
   source_url: string | null;
   run_id: string;
   first_seen: number;

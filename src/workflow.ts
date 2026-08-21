@@ -30,8 +30,11 @@ import {
   dropSection,
   leakedCompanies,
   parseB3Bands,
+  parseBaselineCountry,
   checkRoundSizes,
   renderB3Section,
+  renderEventSection,
+  UNKNOWN_COUNTRY,
   B3_HEADING,
 } from './prompt.ts';
 import { alert } from './notify.ts';
@@ -241,7 +244,8 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
               {
                 baseline,
                 knownEvents: known.map(
-                  (e) => `${e.company} (${e.stage ?? '—'}, ${e.amount ?? '—'})`,
+                  (e) =>
+                    `${e.company} (${e.stage ?? '—'}, ${e.amount ?? '—'}, ${e.country ?? UNKNOWN_COUNTRY})`,
                 ),
               },
             );
@@ -461,20 +465,15 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
     // described it — so a report written from prose would have announced an
     // event we already had as new. The model formats nothing here and decides
     // nothing; it is handed the answer.
-    const eventList =
-      added.length > 0
-        ? added
-            .map(
-              (e) =>
-                `* ${e.company} — ` +
-                [e.sector, e.amount, e.stage, e.investors, e.event_date]
-                  .filter(Boolean)
-                  .join(', ') +
-                (e.source_url ? ` ${e.source_url}` : ''),
-            )
-            .join('\n')
-        : 'None today.';
-    const eventSection = `## New events\n${eventList}\n\n`;
+    //
+    // Bucketed by country, against the country the baseline itself declares it
+    // covers — read from the document, never assumed (bugs.md #39).
+    const baselineCountry = parseBaselineCountry(baseline);
+    if (hasBaseline && !baselineCountry) {
+      // Loud, never silent: with no declared scope nothing can be checked.
+      console.error('[report] baseline declares no country coverage - round size NOT checked');
+    }
+    const eventSection = `${renderEventSection(added, baselineCountry)}\n\n`;
 
     // Round size is arithmetic against a fixed table, so the CODE does it and
     // the model is handed the answer — the same call #28 made for New events.
@@ -486,7 +485,16 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
       // Loud, never silent: the section prints NOT CHECKED and this says why.
       console.error('[report] baseline has no readable B3 flag table - round size NOT checked');
     }
-    const b3Section = renderB3Section(checkRoundSizes(added, bands), bands, hasBaseline);
+    const b3Section = renderB3Section(
+      checkRoundSizes(
+        added.map((e) => ({ ...e, country: e.country ?? UNKNOWN_COUNTRY })),
+        bands,
+        baselineCountry,
+      ),
+      bands,
+      hasBaseline,
+      baselineCountry,
+    );
 
     // Written HERE, not by the model, whenever there is no baseline: "None."
     // and "never measured" are different results and printed the same (§10).

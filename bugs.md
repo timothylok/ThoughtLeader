@@ -44,6 +44,7 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [36](#bug-36--the-b3-round-size-rule-was-applied-in-both-wrong-directions-at-once) | The B3 round-size rule was applied in both wrong directions at once | 🔴 False compliance | ✅ **Fixed 2026-08-21** (computed in code) |
 | [37](#bug-37--the-report-discussed-a-recorded-event-and-called-the-ledger-the-baseline) | The report discussed a recorded event, and called the ledger "the baseline" | 🟠 Wrong attribution | ✅ **Fixed 2026-08-21** (section deleted; leak rate measured at 50%) |
 | [38](#bug-38--a-seed-that-is-not-a-daily-feed-on-a-brief-that-says-daily) | A seed that is not a daily feed, on a brief that says "daily" | 🟡 Wasted iteration | ✅ **Fixed 2026-08-21** (brief change) |
+| [39](#bug-39--a-new-zealand-round-was-cleared-against-the-australian-baseline) | A New Zealand round was cleared against the Australian baseline | 🔴 False compliance | ✅ **Fixed 2026-08-22** (country bucket + scoped B3) |
 
 ---
 
@@ -2169,3 +2170,98 @@ that a source can extract perfectly and be about something else. #35 added that 
 on-topic and unable to produce a row under the recording rule. This adds: it can be
 on-topic *and* recordable in principle and still publish too rarely to answer a question
 asked daily. **Check the pubDate spread before seeding, not the character count.**
+
+---
+
+## Bug 39 — A New Zealand round was cleared against the Australian baseline
+
+**Found:** 2026-08-22, reading run `5b6594b2`'s report. **Severity:** 🔴 False
+compliance · **Status:** ✅ **Fixed 2026-08-22** — country recorded, bucketed and
+scoped out of B3
+
+The daily run recorded Vessev, whose funding round the feed's own headline calls Kiwi:
+
+```
+Fri, 21 Aug 2026 00:33 | Kiwi electric ferry startup Vessev floats $27 million Series A
+```
+
+and the report said:
+
+```
+* Vessev — $27 million (Series A): within $6.2M–$55.8M for Series A.
+```
+
+Those bounds are ⅓× to 3× the **Australian** Q2 2026 median, from Cut Through's
+Australian data. There is no New Zealand baseline in this repo, so the honest verdict was
+*not measured*. What printed instead was a clearance — the same false-compliance failure as
+**#36**, arriving through a dimension #36's fix never considered. #36 closed the STAGE
+dimension of *"nothing is checked against a table that does not cover it"*; the COUNTRY
+dimension was left open, and a fix verified against the path that failed misses the path
+that has not (CLAUDE.md §9).
+
+**The scope rule lived only in prose.** Goal 1 said *"every new **Australian** AI or tech
+funding event"*, and nothing downstream could enforce it: `events` had no country column, so
+no code could tell an Australian row from a New Zealand one. This is §14 — a rule that is
+mechanically checkable, checked in a sentence.
+
+**It was not only the round-size claim.** The same row entered B4's sector taxonomy, which is
+the Australian market's shape, so an NZ sector that maps onto no row would have been reported
+as an Australian divergence — and #34's false-positive gate counts exactly those.
+
+### The fix
+
+`normCountry()` canonicalises both sides of the scope test, and **the baseline declares its
+own coverage** rather than the code assuming it:
+
+```
+**Country coverage: AU.** Every figure here is Australian (Cut Through).
+```
+
+`parseBaselineCountry()` reads that line — parsed, not copied, for the same reason the B3
+bounds are (§14). A baseline with no declaration checks **nothing** and says so, rather than
+defaulting to AU.
+
+Country is then the **outermost** gate in `checkRoundSizes`, before amount and before stage:
+
+```ts
+if (baselineCountry === null || e.country !== baselineCountry) {
+  return { ...base, status: 'other-country', band: null };
+}
+```
+
+`## New events` is bucketed by country, and the label prints even when there is only one
+bucket — a heading that appears only when something is unusual is a heading nobody reads
+when it does.
+
+### What "unknown" had to mean
+
+The model now emits a seventh field. When the material does not state a country the field is
+`-`, and that becomes `UNKNOWN_COUNTRY`, **never** the baseline's country: an unclassified row
+is not B3-checked. That is the safe direction, and it is §10 in a column — "I could not
+tell" and "Australian" must not be one value.
+
+The same rule governed the backfill of the seven pre-existing rows, because a new column
+reads every historical row as clean unless history is written into it (§14):
+
+| country | rows | evidence |
+|---|---|---|
+| AU | Space Angel, Nybro, Seitec | `WA government`, `QIC Ventures`, and the feed's "Canberra defence tech startup" |
+| NZ | Vessev | the feed's "Kiwi electric ferry startup" |
+| unknown | Sophiie AI, Visaible.ai, Bower | **nothing in the stored line or finding names a country** |
+
+Three rows are `unknown` rather than assumed-AU. They are almost certainly Australian; that
+is not evidence, and this column exists because an assumption about country was already
+printed as a measurement once.
+
+### The cost, stated plainly
+
+`startupdaily.net/feed` is **titles only** — no article bodies — so country is available
+only when the headline states it, as it did for Vessev and Seitec. On the ledger as it
+stands, **4 of 7 rows are now outside B3's scope** (3 unknown + 1 NZ) where previously all 7
+were checked, two of them wrongly. Fewer checks that are all valid beats more checks of
+unknown validity, but the coverage drop is real and should be watched: if `unknown` dominates,
+the answer is a source that states location, not a default that guesses it.
+
+**Verified:** 24 new tests (75 → 99), including the exact Vessev row — `other-country`, not
+`within` — an NZ round large enough to breach the AU band still not checked, an unclassified
+row not checked, and `renderEventSection` reproducing what `5b6594b2` should have printed.

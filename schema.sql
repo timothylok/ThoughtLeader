@@ -91,6 +91,13 @@ CREATE TABLE IF NOT EXISTS events (
   stage      TEXT,
   investors  TEXT,
   event_date TEXT,
+  -- Canonical country bucket from normCountry(): 'AU', 'NZ', a verbatim other,
+  -- or 'unknown'. The baseline declares the one country it covers and only that
+  -- bucket is checked against it (bugs.md #39). Added to a live table with
+  --   ALTER TABLE events ADD COLUMN country TEXT;
+  -- and the seven pre-existing rows were backfilled the same day, so NULL never
+  -- means both "unclassified" and "AU" (CLAUDE.md §14).
+  country    TEXT,
   source_url TEXT,                 -- resolved from the [S#] marker, never model-written
   raw        TEXT NOT NULL,        -- the line as written, so a bad key can be audited
   run_id     TEXT NOT NULL,

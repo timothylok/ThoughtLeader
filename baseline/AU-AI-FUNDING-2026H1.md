@@ -3,6 +3,11 @@
 Set 2026-08-20. Comparison period: Q1 2026 vs Q2 2026 (same taxonomy).
 Prior year for scale only: calendar 2025.
 
+**Country coverage: AU.** Every figure here is Australian (Cut Through). A round
+raised anywhere else cannot be checked against B1, B3 or B4 — there is no
+baseline for it, and that is not the same as it being unremarkable. The code
+reads this line; it is the declaration, not a description of one.
+
 ## B1 · Sector distribution — H1 2026
 
 Share is of the **$3.5B raised across H1 2026**, not of the listed rows. Share is

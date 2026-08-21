@@ -11,6 +11,7 @@ import {
   resolveCitations,
   parseEvents,
   leakedCompanies,
+  UNKNOWN_COUNTRY,
 } from './prompt.ts';
 import { alert } from './notify.ts';
 import {
@@ -615,7 +616,12 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
       citable,
       {
         baseline,
-        knownEvents: known.map((e) => `${e.company} (${e.stage ?? '—'}, ${e.amount ?? '—'})`),
+        // Country included on this path too. /step is the prompt-debugging
+        // tool, so a prompt it builds differently is a prompt not being
+        // debugged (bugs.md #24, #37).
+        knownEvents: known.map(
+          (e) => `${e.company} (${e.stage ?? '—'}, ${e.amount ?? '—'}, ${e.country ?? UNKNOWN_COUNTRY})`,
+        ),
       },
     ),
     // 900 to fit the event lines alongside the finding — matches workflow.ts.

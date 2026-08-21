@@ -93,6 +93,10 @@ export interface FundingEvent {
   stage: string | null;
   investors: string | null;
   eventDate: string | null;
+  /** Canonical bucket from `normCountry` — 'AU', 'NZ', a verbatim other, or
+   *  'unknown'. Never null: "not stated" is a value here, not an absence, so it
+   *  cannot be mistaken for the baseline's country (bugs.md #39). */
+  country: string;
   /** Resolved from a [S#] marker against the iteration's citable set — never
    *  a string the model composed (bugs.md #25). */
   sourceUrl: string | null;
