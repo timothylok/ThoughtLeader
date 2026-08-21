@@ -310,6 +310,13 @@ number was self-consistent.
   produced a confident, wrong all-clear. When two tools disagree about how much is
   running, the one reporting **less** is the one to distrust, and the check that
   settles it is the observable effect: can you still reach the port?
+- **A success report is not the world either, whoever it comes from.** A deploy was
+  reported done three times here and production was unchanged each time; the deploy tool
+  and the running service are two different witnesses. Ask what the system would *do*
+  differently if the change were live, and probe **that** — `GET /events` either returns
+  the new column or it does not, and D1 already held the data so it could not pass by
+  accident. Rule out the cheap explanations that would make everyone right (a stale
+  preview URL, a cached response) before concluding, then say plainly what the probe shows.
 - **State the arm sizes when reporting.** "n=8 vs n=3" makes an n=0 arm impossible
   to hide behind a percentage. This is §11 pointed at your own instrumentation
   rather than at the world.
@@ -322,6 +329,12 @@ number was self-consistent.
   equalled the correct **byte** count, and a value the server had just acknowledged
   as correct still read as damaged. **When two witnesses disagree about stored data,
   distrust the one with a locale in its path**, and re-read before reporting damage.
+- **Your own WRITER is an instrument too.** Pushing a document to the database stored it
+  141 characters longer than the file: Python text mode on Windows translated every `\n`
+  to `\r\n`, and the document had 141 lines. The tell was arithmetic and immediate — the
+  delta *equalled the line count*. Name the newline on both sides
+  (`open(p, 'w', encoding='utf-8', newline='')`), and verify stored content by comparing it
+  to the source, never by trusting the write.
 
 The test: name the observation that would look different if the treatment had
 never been applied. If every number in your table survives that question

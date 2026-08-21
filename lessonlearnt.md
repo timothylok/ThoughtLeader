@@ -979,3 +979,83 @@ would reject, and the map gets built. Designing it now would be n=1 dressed as a
   schema, in a change written specifically to avoid that class of bug. Caught before the
   first query, and backfilled.
 
+---
+
+## 15. Addendum — session 12, 2026-08-22
+
+Two failures this session, and neither was in the code that was written. One was a fix from
+the previous session that had closed the wrong dimension of its own invariant. The other was
+a deployment that reported success three times and never happened.
+
+### The same invariant, one dimension over
+
+Session 11 fixed #36: the model had cleared a $20M Seed as *"within the expected range"* when
+B3 flags Seed above $12.0M. The fix moved round size into code and stated the invariant as
+*nothing is checked against a table that does not cover it* — then verified it along the
+dimension that had failed, **stage**.
+
+The next run cleared Vessev's $27M Series A as `within $6.2M–$55.8M`. Vessev is in Auckland;
+the feed's own headline calls it *Kiwi*. Those bounds are ⅓× to 3× the **Australian** median.
+Same invariant, same false clearance, one dimension over — and the fix had shipped the day
+before, with tests.
+
+**The dimension you verify is the dimension you fixed.** §9 says to grep for every writer to
+the invariant; this says something narrower and easier to miss. `checkRoundSizes` had exactly
+one caller, so a writer-grep finds nothing. The gap was not another call site — it was another
+*way for the table not to cover the row*. Stage was checked. Country was not a field.
+
+**And the scope rule was in prose the whole time.** Goal 1 said *"every new **Australian** AI
+or tech funding event"*. No code could enforce it, because `events` had no country column: the
+rule and the data to check it never existed in the same place. §14, arriving through the goal
+text rather than the report.
+
+### What "unknown" had to mean, and what it cost
+
+The model now emits country as a seventh field. When the material does not state one it is
+`unknown` — never AU — and an `unknown` row is not B3-checked. That is the safe direction and
+it is not free: `startupdaily.net/feed` is **titles only**, so country is available only when
+the headline gives one. **4 of 7 ledger rows now sit outside B3's scope** where all 7 were
+checked before, two of them wrongly.
+
+Stating that number was the point. The alternative — treating "the feed is Australian" as the
+default — is the assumption that produced the bug, and it would have made the coverage figure
+look perfect while re-mislabelling the next NZ round. Fewer checks that are all valid beat
+more checks of unknown validity, but only if the coverage drop is written down where the next
+person sees it.
+
+### A deploy that reported success and never landed
+
+Three times the deploy was reported done. Three times production was unchanged. What settled
+it was not better questioning — it was a **behavioural probe of the running system**:
+
+```sh
+curl -s "$WORKER_URL/events" | grep -c country   # 0 = old code, whatever anything else says
+```
+
+`recentEvents()` had gained a column in its SELECT, so the live response either carries
+`country` or it does not. D1 already had the column populated, so the probe could not pass by
+accident. Three witnesses agreed at every round — `wrangler versions list` (newest still
+`a9b92f8e`), `wrangler deployments list`, and the worker's own output.
+
+The generalisation is §12's, pointed at a report rather than a syscall: **a claim that a
+change is live is not the change being live**, and the deploy tool and the running service are
+two different witnesses. Before accepting either, ask what the system would *do* differently
+if the change were in effect, and probe that. It cost four round trips here; it would have
+cost one.
+
+Ruling things out in the right order mattered too. Both cheap hypotheses that would have made
+everyone right — a versioned preview URL that never updates, and a cached response — were
+checkable in one command each, and both were wrong. Eliminating them is what made "the deploy
+is not landing" a conclusion rather than an accusation.
+
+### The writer is an instrument too
+
+Pushing the baseline into D1 stored a document **141 characters longer** than the file. The
+SQL was written with Python's text mode on Windows, which translates every `\n` to `\r\n`;
+the document has 141 lines.
+
+The tell was arithmetic, and it was available immediately: the length delta *equalled the line
+count*. Session 8 recorded the same family of bug in the read direction — a `curl | python`
+pipe decoding UTF-8 as cp1252 and reporting clean data as mojibake. Name the newline on both
+sides — `io.open(p, 'w', encoding='utf-8', newline='')` — and verify a stored document by
+comparing it to the file, not by trusting the write.

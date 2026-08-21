@@ -282,7 +282,7 @@ so without it every run starts amnesiac.
 The model emits events as pipe-delimited **lines**, not nested JSON:
 
 ```
-Sophiie AI | construction | $5m | Seed | Blackbird | 2026-08-17 | [S1]
+Sophiie AI | construction | $5m | Seed | Blackbird | 2026-08-17 | Australia | [S1]
 ```
 
 `parseReasoning` exists because this model wraps JSON in prose and code fences; asking it
@@ -290,6 +290,12 @@ for an array of objects raises the failure rate of the step that produces all th
 A malformed line is dropped and its neighbours survive, which nested JSON cannot offer.
 The trailing `[S1]` is resolved against the iteration's citable set (§ bugs.md #25), so a
 ledger row can no more carry an invented URL than a citation can.
+
+**Country is the seventh field, appended rather than inserted**, so a line written in the
+old six-field shape still parses instead of shifting every value one place left. It is
+canonicalised by `normCountry()` — `AU`, `NZ`, a verbatim other, or `unknown` — and an
+unstated country becomes `unknown`, never the baseline's country. That asymmetry is the
+whole point of the column: see §2.11.
 
 **Silence is a valid result.** An iteration that finds nothing new returns `"events": []`
 and a one-line finding saying so. Before this, the loop had to produce a finding every
@@ -351,8 +357,8 @@ in production.
 
 | section | written by | why |
 |---|---|---|
-| `## New events` | code, from `eventsForRun()` | only the `UNIQUE(key)` insert knows what was actually novel. The model re-offered an event it had just been shown as recorded (#28) |
-| `## Round size vs baseline (B3)` | code, from the baseline's own flag table | arithmetic against a fixed table. The model called a $20M Seed "within the expected range" when B3 flags Seed above $12.0M, and checked a stageless round as a Seed when B3 says in words that it cannot be checked — both cited to B3 (#36) |
+| `## New events` | code, from `eventsForRun()` | only the `UNIQUE(key)` insert knows what was actually novel. The model re-offered an event it had just been shown as recorded (#28). Bucketed by country since #39 |
+| `## Round size vs baseline (B3)` | code, from the baseline's own flag table | arithmetic against a fixed table. The model called a $20M Seed "within the expected range" when B3 flags Seed above $12.0M, and checked a stageless round as a Seed when B3 says in words that it cannot be checked — both cited to B3 (#36). Country is the outermost gate: a round outside the baseline's country is not checked at all (#39) |
 | `## Divergence from baseline` | the model | sectors only. Round size is answered above it, and B2 instructs the loop not to flag investors at all |
 | ~~`## Notes`~~ | **deleted** | every one ever written restated an already-recorded event (#37) |
 
@@ -396,6 +402,54 @@ It is **50%**: 4 of the 8 findings ever handed a non-empty `ALREADY RECORDED` li
 something on it, across four runs on three days. Stored in `findings.leaked`, NULL when
 clean, and the historical rows were backfilled — without that, NULL would mean both "clean"
 and "never measured", which is #21 exactly.
+
+---
+
+### 2.11 The baseline covers one country, and it says which
+
+`## New events` is grouped by country and B3 checks only the bucket the baseline covers.
+That is not a presentation choice. Run `5b6594b2` recorded Vessev — whose round the feed's
+own headline calls *Kiwi* — and the report said:
+
+```
+* Vessev — $27 million (Series A): within $6.2M–$55.8M for Series A.
+```
+
+Those bounds are ⅓× to 3× the **Australian** Q2 median. There is no New Zealand baseline
+here, so the honest verdict was *not measured*; what printed was a clearance. #36 had
+already fixed exactly this failure along the **stage** dimension — *nothing is checked
+against a table that does not cover it* — and left the **country** dimension open, which
+is §9 in one sentence: the incident is one violation of an invariant, not the whole of it.
+
+The scope rule had lived only in prose. Goal 1 said *"every new **Australian** event"* and
+no code could tell an Australian row from a New Zealand one, because `events` had no
+country column. A rule that is mechanically checkable, checked in a sentence (§14).
+
+Three things make it structural now:
+
+- **The baseline declares its own coverage** — `**Country coverage: AU.**` — and
+  `parseBaselineCountry()` reads it. Parsed, not copied, for the same reason the B3 bounds
+  are: a constant in TypeScript would go on asserting AU over the next baseline loaded. A
+  document with no declaration checks **nothing** and says so.
+- **Country is the outermost gate**, before amount and before stage, so a round outside the
+  baseline's country cannot reach a band at all.
+- **`unknown` is not the baseline's country.** An unstated country is its own bucket and is
+  never checked — §10 in a column, where "I could not tell" and "Australian" must not be
+  one value. The seven pre-existing rows were backfilled from their own evidence (`WA
+  government`, `QIC Ventures`, the feed's "Canberra"; `Kiwi` for Vessev), and three were
+  left `unknown` because nothing in the stored line named a country. Without that backfill
+  NULL would mean both "unclassified" and "AU", which is #21 in a schema.
+
+Sector divergence is scoped the same way: B4's taxonomy is the Australian market's shape,
+so a New Zealand sector mapping onto no row is not an Australian divergence — and #34's
+false-positive gate counts exactly those.
+
+**The cost is stated rather than hidden.** `startupdaily.net/feed` is titles only, so a
+country is available only when the headline gives one. On the ledger as it stands **4 of 7
+rows are outside B3's scope** (3 `unknown`, 1 NZ) where all 7 were checked before, two of
+them wrongly. Fewer checks that are all valid beats more checks of unknown validity, but if
+`unknown` comes to dominate the answer is a source that states location — not a default
+that guesses it.
 
 ---
 

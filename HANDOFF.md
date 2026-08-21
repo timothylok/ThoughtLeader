@@ -1,6 +1,135 @@
-# Session handoff — session 11, 2026-08-21
+# Session handoff — session 12, 2026-08-22
 
-## Where things stand — 2026-08-21 08:30 NZST
+## Where things stand — 2026-08-22 09:55 NZST
+
+**Live:** `$WORKER_URL` (see local `.env`) · version **`bb6d9bff`** · `tsc --noEmit` clean ·
+**99/99 tests pass** · **nothing in flight**.
+
+**Crons unchanged:** `*/30 * * * *` watchdog · `0 15` **and** `0 16` daily. Next run
+2026-08-22 16:00Z = 04:00 NZST on the 23rd; the `0 15` arm takes over on 27 Sep.
+
+**Sources: 1** — `startupdaily.net/feed`, and it is **titles only**. No article bodies, so
+every sector and every country the loop records comes from a headline. That constraint is
+now load-bearing: see the country coverage note below.
+
+**Ledger: 7 events, and they now carry a country.**
+
+| country | rows |
+|---|---|
+| AU | Space Angel, Nybro, Seitec |
+| NZ | Vessev |
+| unknown | Sophiie AI, Visaible.ai, Bower |
+
+**Spend:** 272 neurons on UTC 2026-08-21 against 10,000 — down from 966, a 72% fall, which
+is the one-seed shape the last session predicted.
+
+**Schema changed:** `events.country TEXT` was added to live D1 by hand
+(`ALTER TABLE events ADD COLUMN country TEXT;`) **before** the deploy, because
+`recordEvents` now writes it, and the seven pre-existing rows were backfilled in the same
+session. **0 NULLs**, so NULL never means both "unclassified" and "AU". `schema.sql` carries
+the column and the ALTER in a comment.
+
+**D1 content also changed, and neither needed a deploy:** the baseline now declares
+`**Country coverage: AU.**` (the code parses that line — without it B3 checks nothing and
+says so), and `control.daily_brief` was rewritten: topic is now AU **and** NZ, goal 1 asks
+for a country and forbids inferring one from the publication, goal 2 is scoped to the
+baseline's own country.
+
+### Session 11's three pre-registered questions, all answered by run `5b6594b2`
+
+1. **B3 rendered correctly** — including mapping `pre-Seed` onto the Angel / Pre-Seed row,
+   the case #36 got wrong. The divergence prose made no round-size claim. #36 holds.
+2. **`## Notes` stayed gone and no leak surfaced in the divergence prose.** The #37 fix does
+   not need to move upstream.
+3. **#34 did not repeat.** Still one sighting. **The gate is unchanged: two more sector
+   false positives and the taxonomy map gets built.**
+
+**Leak rate is now 5 of 11 findings** (was 4 of 10). The new one is `["Seitec"]` — recorded
+the day before, named in the finding, and correctly kept out of the report by the code-owned
+event list. Finding-level leaking continues near 50%; report-level leaking is 0.
+
+### What that run also exposed — #39, fixed and deployed
+
+The same report cleared Vessev's $27M Series A as `within $6.2M–$55.8M`. Vessev is in
+Auckland — the feed's headline calls it *Kiwi* — and those bounds are the **Australian**
+median. #36 had closed that exact failure along the **stage** dimension the day before and
+left the **country** dimension open. Country is now the outermost gate in `checkRoundSizes`,
+`## New events` is bucketed, and sector divergence is scoped to the baseline's country too.
+
+**The deploy did not land the first three times it was attempted.** Production stayed on
+`a9b92f8e` while everything else had already moved. What settled it was a behavioural probe
+rather than the deploy tooling — keep this one:
+
+```sh
+set -a; . ./.env; set +a
+curl -s "$WORKER_URL/events" | grep -c country   # 0 = old code, whatever else says otherwise
+```
+
+## 👉 Start here next session
+
+**1. Read the 2026-08-22 16:00Z run's report.** It is the first to exercise the country
+path, and three questions were pre-registered before it ran:
+
+```sh
+set -a; . ./.env; set +a
+curl -s "$WORKER_URL/state" | head -20                 # newest run id
+curl -s "$WORKER_URL/state?run=<id>" | python -c "import json,sys; sys.stdout.buffer.write(json.loads(sys.stdin.buffer.read().decode('utf-8'))['run']['report'].encode('utf-8'))"
+```
+
+- **Does the model populate country at all?** This is the open question, not the bucketing.
+  If a headline names a city and the row still comes back `unknown`, the field is being
+  ignored and the *prompt* needs work. Check the row against the headline, not against
+  plausibility.
+- **Do the bucket labels render**, and does B3 skip anything non-AU? On an all-AU day the
+  correct output is `**Australia**` and nothing else.
+- **Did #34's sector false positive repeat?** Two more and the taxonomy map gets built. One
+  or none and it was noise. That rule predates the data — do not renegotiate it after
+  seeing the run.
+
+**2. Watch the B3 coverage figure.** 4 of 7 rows are currently outside B3's scope (3
+`unknown`, 1 NZ) where all 7 were checked before — two of them wrongly. That trade was
+deliberate and is argued in README §2.11:
+
+```sh
+npx wrangler d1 execute research-log --remote --json --command \
+  "SELECT country, COUNT(*) AS n FROM events GROUP BY country"
+```
+
+**If `unknown` comes to dominate, the answer is a source that states location — not a
+default that guesses it.** A default would make this number look perfect and re-file the
+next NZ round as Australian.
+
+**3. The leak rate is a query, not an argument:**
+
+```sh
+npx wrangler d1 execute research-log --remote --json --command \
+  "SELECT COUNT(*) AS findings, SUM(CASE WHEN leaked IS NOT NULL THEN 1 ELSE 0 END) AS leaked
+     FROM findings f JOIN runs r ON r.id=f.run_id
+    WHERE r.topic LIKE '%AI and tech funding%'"
+```
+
+Note the `LIKE` pattern: the topic changed this session, so a query anchored on
+`'Australian AI and tech funding%'` will silently stop counting new runs.
+
+**4. Still open, unchanged:** #15 (HTML CPU), #16 (source validation), #19 (retry path,
+never exercised by a real retry), #20 (the allocation window), #34 (gated), the NZ brief,
+`qwen3-embedding-0.6b` (deprioritised by the user). Finding a real second daily funding feed
+is still the open sourcing work — there is none among everything tested (#29, #35, #38).
+
+**One adjacent gap, untouched and deliberate:** `## New events` is **not** in the
+`dropSection` list alongside `B3_HEADING` and `Notes`, so a model-written one would survive
+into the report. It has never happened, and the model is told not to write one. Out of scope
+for #39; worth closing next time that file is open.
+
+**Standing rules:** commit only when asked · push only when asked · secret scan gates the
+push · **never deploy inside the 16:00Z window**, and the pre-deploy check must *exit*, not
+print · `wrangler secret put` counts as a deploy · `POST /start` and `wrangler deploy` are
+both blocked by the permission classifier here, so live verification needs the user to run
+them.
+
+---
+
+## Where things stood — 2026-08-21 08:30 NZST (session 11 — superseded)
 
 **Live:** `$WORKER_URL` (see local `.env`) · version **`a9b92f8e`** · `tsc --noEmit` clean ·
 **75/75 tests pass** · **nothing in flight**.
@@ -47,7 +176,7 @@ rate stays near 50% (cosmetic, within-run only — `recall()` is namespaced per 
 whether a leak surfaces in the divergence prose instead and the fix must move upstream.
 Also whether #34's sector false positive repeats.
 
-## 👉 Start here next session
+## Start here — session 11's list (superseded, kept for the reasoning)
 
 **1. Read the 2026-08-21 16:00Z run's report.** It is the first to exercise the new
 report path, and three questions were pre-registered before it ran:

@@ -44,7 +44,7 @@ while broken, which is why the "How it showed up" column matters more than the f
 | [36](#bug-36--the-b3-round-size-rule-was-applied-in-both-wrong-directions-at-once) | The B3 round-size rule was applied in both wrong directions at once | 🔴 False compliance | ✅ **Fixed 2026-08-21** (computed in code) |
 | [37](#bug-37--the-report-discussed-a-recorded-event-and-called-the-ledger-the-baseline) | The report discussed a recorded event, and called the ledger "the baseline" | 🟠 Wrong attribution | ✅ **Fixed 2026-08-21** (section deleted; leak rate measured at 50%) |
 | [38](#bug-38--a-seed-that-is-not-a-daily-feed-on-a-brief-that-says-daily) | A seed that is not a daily feed, on a brief that says "daily" | 🟡 Wasted iteration | ✅ **Fixed 2026-08-21** (brief change) |
-| [39](#bug-39--a-new-zealand-round-was-cleared-against-the-australian-baseline) | A New Zealand round was cleared against the Australian baseline | 🔴 False compliance | ✅ **Fixed 2026-08-22** (country bucket + scoped B3) |
+| [39](#bug-39--a-new-zealand-round-was-cleared-against-the-australian-baseline) | A New Zealand round was cleared against the Australian baseline | 🔴 False compliance | ✅ **Fixed & deployed 2026-08-22** (`bb6d9bff`) |
 
 ---
 
@@ -2176,8 +2176,8 @@ asked daily. **Check the pubDate spread before seeding, not the character count.
 ## Bug 39 — A New Zealand round was cleared against the Australian baseline
 
 **Found:** 2026-08-22, reading run `5b6594b2`'s report. **Severity:** 🔴 False
-compliance · **Status:** ✅ **Fixed 2026-08-22** — country recorded, bucketed and
-scoped out of B3
+compliance · **Status:** ✅ **Fixed & deployed 2026-08-22** (`bb6d9bff`) — country recorded,
+bucketed and scoped out of B3
 
 The daily run recorded Vessev, whose funding round the feed's own headline calls Kiwi:
 
@@ -2261,6 +2261,11 @@ stands, **4 of 7 rows are now outside B3's scope** (3 unknown + 1 NZ) where prev
 were checked, two of them wrongly. Fewer checks that are all valid beats more checks of
 unknown validity, but the coverage drop is real and should be watched: if `unknown` dominates,
 the answer is a source that states location, not a default that guesses it.
+
+**Verified in production 2026-08-22:** `GET /events` returns `country` on all seven rows —
+`Vessev NZ`, three `AU`, three `unknown` — against a live worker that returned no such field
+before the deploy. That probe is also what caught three deploys that reported success and
+never landed (lessonlearnt §15).
 
 **Verified:** 24 new tests (75 → 99), including the exact Vessev row — `other-country`, not
 `within` — an NZ round large enough to breach the AU band still not checked, an unclassified
