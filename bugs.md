@@ -810,7 +810,7 @@ that failed, leaving the identical defect one branch away. CLAUDE.md §9.
 
 ## Bug 20 — `DAILY_NEURON_BUDGET` resets on a UTC day; Cloudflare's allocation does not
 
-**Severity:** 🟠 Guard shape · **Status:** **Open** (mitigated, not fixed) ·
+**Severity:** 🟠 Guard shape · **Status:** ✅ **Fixed & deployed 2026-08-25** ·
 found 2026-08-12 by a verification run that failed on a fresh UTC day
 
 **How it showed up.** The bug #13/#17/#19 verification was armed for 00:05 UTC on the
@@ -856,20 +856,62 @@ windows**, so the guard can authorise spending that the platform refuses. On the
 plan that costs a run; on Paid, where nothing refuses anything, it is the difference
 between the free allocation and a bill.
 
-**Mitigation applied.** `DAILY_NEURON_BUDGET` 10000 → **8000**, which buys headroom
-against the mismatch but does not correct the shape.
+**Mitigation applied, then reverted.** `DAILY_NEURON_BUDGET` 10000 → 8000 bought
+headroom without correcting the shape. It was restored to the full 10000 on
+2026-08-19 (`34b666e`), **by request** — the comment explaining the mismatch was
+kept in `wrangler.jsonc`, but the guard went back to exactly the shape that
+caused the original failure. Nothing about the underlying bug had changed; only
+the headroom against it had shrunk back to zero.
 
-**Real fix (not applied).** Meter over a trailing 24-hour window rather than a
-calendar day — the `usage` table would need per-call or per-hour rows instead of one
-row per day, and `neuronsToday()` becomes `neuronsInTrailing24h()`. Deferred: it is a
-schema change, and the mitigation holds for one daily run of ~2,400 neurons.
+**Real fix (applied 2026-08-25).** Meter over a trailing 24-hour window rather
+than a calendar day. `usage` is now one row per AI call (`at, day, model,
+neurons, calls`) instead of one aggregated row per `(day, model)`;
+`neuronsToday()` → `neuronsInTrailing24h()`, summing `WHERE at > now - 24h`. `day`
+is kept, derived from `at`, so `usageByModel`/`usageHistory` and the many
+`GROUP BY day` reconciliation commands already written into this file and
+`HANDOFF.md` keep working unchanged in shape. The public `/usage` JSON field
+stays named `neuronsToday` (liverun.html reads it); only what it measures
+changed.
+
+**Why now, not when it was deferred.** Today's spend (~300 neurons/day, one RSS
+source) makes the mismatch practically harmless — nowhere near the ~13% gap that
+actually bit at 7,900–10,288 neurons/day. But that is exactly why this was the
+moment to fix it: the migration (aggregated daily rows → per-call rows) is
+trivial and low-risk at today's volume, and the standing open item — finding a
+second daily AU/NZ feed — is the one thing that would push spend back toward
+where this bug matters again. Fixing the shape while it's cheap beats fixing it
+under the exact conditions that expose it.
+
+**Migrated live**, gated on `/state`/`wrangler workflows instances list` showing
+nothing running first: `usage` renamed to `usage_by_day_legacy` (kept, not
+dropped) and recreated; backfilled with one row per old `(day, model)` total,
+timestamped `23:59:59Z` that day rather than a neutral midpoint — reading old
+usage as too *recent* only makes the guard more conservative, which is the safe
+direction to be wrong in if a placeholder has to be wrong at all. Old (already
+deployed) code's read paths (`usageByModel`, `usageHistory`, the watchdog's
+budget check) still worked against the new schema in the gap between migrating
+and deploying, because `day` was kept; only `addNeurons`'s `ON CONFLICT(day,
+model)` write would have broken there, so the deploy followed the migration
+immediately, with no manual AI call made in between.
+
+**Verified against production** after deploying `c7e65e9b`:
+
+| Check | Result |
+|---|---|
+| Pre/post migration totals | 27 rows, 25154.4617… neurons, 397 calls — identical in the new table and the untouched `usage_by_day_legacy` |
+| A real AI call's write path | `spentToday` in the response and `/usage`'s `neuronsToday` both increased by exactly that call's `usage.neurons` (322.04062192871856 = 320.51096921398926 + 1.529652714729309) |
+| The trailing-window boundary, both directions | `neuronsToday` = 322.04 = (08-24's 320.51, still <24h old) + (the new call) — 08-23's 296.79 (>24h old) correctly excluded, where the old calendar-day query would have read exactly 0 at this point in the UTC day regardless of yesterday's spend |
 
 **Lesson.** `HANDOFF.md` asserted the reset time as a fact and the verification was
 scheduled against it; the assertion had never been measured. This is CLAUDE.md §6
 exactly — *never let an assumption become a justification in the docs* — and it is
 the second time in this project that a sentence in a doc, not a line of code, was
 the defect. The fix habit is the probe that replaced the schedule: **test the
-condition, don't trust the clock.**
+condition, don't trust the clock.** And a second lesson from how this one closed:
+a mitigation that gets reverted "by request" without the underlying shape being
+fixed is not a closed loop — the comment explaining why stayed, doing nothing,
+while the risk it described came back at full strength (CLAUDE.md §13, a
+documented limitation is still a defect).
 
 ---
 
