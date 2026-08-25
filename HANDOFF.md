@@ -1,9 +1,9 @@
 # Session handoff — session 13, 2026-08-25
 
-## Where things stand — 2026-08-25 14:35 NZST
+## Where things stand — 2026-08-25 15:35 NZST
 
-**Live:** `$WORKER_URL` (see local `.env`) · version **`7f27de2f`** · `tsc --noEmit` clean ·
-**104/104 tests pass** (5 new this session) · **nothing in flight**.
+**Live:** `$WORKER_URL` (see local `.env`) · version **`35ee883d`** · `tsc --noEmit` clean ·
+**112/112 tests pass** (13 new this session) · **nothing in flight**.
 
 **Crons unchanged:** `*/30 * * * *` watchdog · `0 15` **and** `0 16` daily.
 
@@ -59,34 +59,70 @@ or a followed link (`MAX_SOURCE_DEPTH`) from reintroducing large HTML, which is
 why the fix had to live in code rather than in which sources happen to be curated
 today.
 
+## Bug #16 closed — the specific failure mode, not the general class
+
+Chasing #15 turned up why the NZ Wikipedia page was so large: `/wiki/Title` can
+render a **completely different article's HTML** when MediaWiki auto-follows a
+`#REDIRECT` entry, and the wrong article can be large enough to read as a real,
+on-topic result — length alone can't tell the difference. There is no automated
+seed-vetting pipeline to patch (sources come from `control.daily_brief`, edited
+by hand), so the guard lives where the actual failure happened: the manual
+`POST /step {"probe": url}` tool.
+
+- `wikipediaRawUrl()` + `parseRedirectTarget()` (`ingest.ts`) detect the redirect
+  from the raw wikitext. `/step`'s probe branch checks it **before** the HTML
+  fetch, returning the redirect target directly and skipping the fetch entirely
+  when one is found.
+- **The first version checked *after* the HTML fetch, and testing it against the
+  two real failing URLs caught that it did nothing on either** — the destination
+  article is large enough to hit bug #15's byte cap, which throws before any
+  post-fetch check downstream of it ever runs. Reordered to check first, both
+  because it's cheaper (skips the fetch on a known redirect) and because it's
+  the only ordering that actually fires. Worth stating plainly: this is the same
+  mistake class the fix was supposed to prevent — verifying against the path
+  that would obviously work rather than the one that had actually failed.
+- **Verified** against both real historical cases (`wrangler dev --remote`, then
+  production `35ee883d`): `Science_and_technology_in_New_Zealand` and
+  `Science_and_technology_in_Australia` both now return
+  `{"possibleRedirect": true, "warning": "…"}` naming the true target, no HTML
+  fetch attempted. A real article (`wiki/Australia`) still falls through to the
+  normal path with no false positive. `startupdaily.net/feed` untouched — the
+  guard only runs on `wikipedia.org` URLs.
+
+**What this does not fix:** it's a Wikipedia-specific pattern match, not a
+general relevance checker. It doesn't validate that a non-redirecting page is
+actually on-topic, and does nothing for a future non-Wikipedia source that turns
+out to be off-topic. The by-hand relevance check bug #16 originally called for
+is still the standing practice for any new candidate source — this guard only
+removes the one specific trap that already caused damage.
+
 ## 👉 Start here next session
 
-1. **Bug #16 — source validation confirms extractability, not relevance.** The
-   next-oldest open item, same shape of gap as #15: `startupdaily.net/feed` was
-   checked for "does it fetch," never for "is it what the goals actually need."
-   Not started this session.
-2. **Get a real `cpuTime` number for the #15 fix, opportunistically.** Next time
+1. **Get a real `cpuTime` number for the #15 fix, opportunistically.** Next time
    `wrangler tail --format json` is open for something else, probe a large HTML
    page and confirm the cap fires well under 10ms rather than just "doesn't
    crash." Not urgent enough to open a tail session solely for this.
-3. **Watch whether the ledger stays quiet.** Three straight empty days is
-   expected shape for one RSS source, not yet a symptom — but there is still no
-   second daily AU/NZ funding feed (open since session 6), so a genuinely stale
-   source and a genuinely quiet market currently look identical from here.
-4. **Still open, unchanged:** #16, #20 (the allocation window, mitigated not
-   fixed), #17/#19 (retry-path accounting, still never exercised by a real
-   retry — over two weeks of clean runs now), the NZ brief question,
-   `qwen3-embedding-0.6b` (deprioritised).
+2. **Watch whether the ledger stays quiet.** Three straight empty days (now
+   four) is expected shape for one RSS source, not yet a symptom — but there is
+   still no second daily AU/NZ funding feed (open since session 6), so a
+   genuinely stale source and a genuinely quiet market currently look identical
+   from here. **When that search happens, it still needs the by-hand relevance
+   check** — #16's guard covers the Wikipedia trap, not general relevance.
+3. **Still open, unchanged:** #20 (the allocation window, mitigated not fixed),
+   #17/#19 (retry-path accounting, still never exercised by a real retry — over
+   two weeks of clean runs now), the NZ brief question, `qwen3-embedding-0.6b`
+   (deprioritised).
 
 **Standing rules:** commit only when asked · push only when asked (still not done
 this session — commits are local on `main`) · secret scan gates the push ·
 **never deploy inside the 16:00Z window**, and the pre-deploy check must *exit*,
 not print · `wrangler secret put` counts as a deploy · `wrangler deploy` ran
-directly this session on explicit request (gate: `/state` had no `running` row
-and `wrangler workflows instances list` showed nothing in flight, checked before
-touching production) — for verification *without* that request, prefer
-`wrangler dev --remote`, which exercises the real runtime without touching
-production. `POST /start` remains blocked by the permission classifier here.
+directly this session, twice, on explicit request each time (gate: `/state` had
+no `running` row and `wrangler workflows instances list` showed nothing in
+flight, checked before each deploy) — for verification *without* that request,
+prefer `wrangler dev --remote`, which exercises the real runtime without
+touching production. `POST /start` remains blocked by the permission classifier
+here.
 
 ---
 
