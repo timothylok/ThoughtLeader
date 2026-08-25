@@ -1,9 +1,10 @@
 # Session handoff — session 13, 2026-08-25
 
-## Where things stand — 2026-08-25 15:35 NZST
+## Where things stand — 2026-08-25 16:10 NZST
 
-**Live:** `$WORKER_URL` (see local `.env`) · version **`35ee883d`** · `tsc --noEmit` clean ·
-**112/112 tests pass** (13 new this session) · **nothing in flight**.
+**Live:** `$WORKER_URL` (see local `.env`) · version **`c7e65e9b`** · `tsc --noEmit` clean ·
+**112/112 tests pass** (13 new this session — `db.ts`'s change has no pure-function
+tests, since D1 needs a real runtime; verified live instead) · **nothing in flight**.
 
 **Crons unchanged:** `*/30 * * * *` watchdog · `0 15` **and** `0 16` daily.
 
@@ -96,6 +97,45 @@ out to be off-topic. The by-hand relevance check bug #16 originally called for
 is still the standing practice for any new candidate source — this guard only
 removes the one specific trap that already caused damage.
 
+## Bug #20 closed — spend now meters a real trailing 24h window
+
+Filed 2026-08-12: Cloudflare enforces something closer to a rolling ~24h window
+than a UTC calendar day, so a guard keyed on `utcDay()` can read 0 right after
+midnight while the platform is still refusing calls against the previous day's
+usage. The 8000-neuron mitigation that bought headroom against this was
+**reverted to the full 10000 "by request" on 2026-08-19** (`34b666e`) — the
+comment explaining the mismatch stayed in `wrangler.jsonc`, but the guard went
+back to exactly the shape that caused the original failure. Full writeup in
+`bugs.md` #20; the short version:
+
+- `usage` is now one row per AI call (`at, day, model, neurons, calls`), not one
+  aggregated row per `(day, model)`. `neuronsToday()` → `neuronsInTrailing24h()`,
+  a real `SUM(...) WHERE at > now - 24h`. `day` is kept, derived from `at`, so
+  `usageByModel`/`usageHistory` and every `GROUP BY day` reconciliation command
+  already written into this file and `bugs.md` keep working unchanged.
+- **Why now, specifically:** today's ~300 neurons/day makes the actual mismatch
+  harmless in practice — nowhere near the ~13% gap that bit at 7,900–10,288
+  neurons/day. That's exactly why this was the cheap moment to fix the shape:
+  low call volume makes the migration low-risk, and the standing open item
+  (finding a second daily feed) is the thing that would push spend back toward
+  where this matters again.
+- **Migrated live**, gated the same way as every deploy this session
+  (`/state` + `wrangler workflows instances list` showing nothing running,
+  checked immediately before). `usage` renamed to `usage_by_day_legacy` (kept,
+  not dropped) and recreated; backfilled with one row per old aggregate,
+  timestamped `23:59:59Z` that day — reading old usage as too *recent* only
+  makes the guard more conservative, the safe direction to be wrong in.
+  Migration and deploy ran back-to-back with no manual AI call in the gap,
+  because old code's read paths still work against the new schema (`day` was
+  kept) but its `ON CONFLICT(day, model)` write would not have.
+- **Verified against production** after deploying `c7e65e9b`: pre/post totals
+  identical (27 rows, 25154.4617… neurons, 397 calls, in both the new table and
+  the untouched legacy one); a real AI call's cost appeared in `neuronsToday`
+  within one request, exact to the decimal; the trailing-window boundary
+  checked both directions with real numbers — 08-24's usage (still <24h old)
+  counted, 08-23's (>24h old) correctly excluded, where the old query would
+  have read 0 at this point in the UTC day regardless of yesterday's spend.
+
 ## 👉 Start here next session
 
 1. **Get a real `cpuTime` number for the #15 fix, opportunistically.** Next time
@@ -107,22 +147,27 @@ removes the one specific trap that already caused damage.
    still no second daily AU/NZ funding feed (open since session 6), so a
    genuinely stale source and a genuinely quiet market currently look identical
    from here. **When that search happens, it still needs the by-hand relevance
-   check** — #16's guard covers the Wikipedia trap, not general relevance.
-3. **Still open, unchanged:** #20 (the allocation window, mitigated not fixed),
-   #17/#19 (retry-path accounting, still never exercised by a real retry — over
-   two weeks of clean runs now), the NZ brief question, `qwen3-embedding-0.6b`
-   (deprioritised).
+   check** — #16's guard covers the Wikipedia trap, not general relevance —
+   **and it's now the thing that would re-expose #20's window mismatch**, fixed
+   this session while spend was low specifically so that search is safe to do.
+3. **Still open, unchanged:** #17/#19 (retry-path accounting, still never
+   exercised by a real retry — over two weeks of clean runs now), the NZ brief
+   question, `qwen3-embedding-0.6b` (deprioritised). Consider whether
+   `usage_by_day_legacy` can be dropped once a few days of the new schema have
+   run cleanly — kept as a rollback safety net for this migration, not meant to
+   be permanent.
 
 **Standing rules:** commit only when asked · push only when asked (still not done
 this session — commits are local on `main`) · secret scan gates the push ·
 **never deploy inside the 16:00Z window**, and the pre-deploy check must *exit*,
 not print · `wrangler secret put` counts as a deploy · `wrangler deploy` ran
-directly this session, twice, on explicit request each time (gate: `/state` had
-no `running` row and `wrangler workflows instances list` showed nothing in
-flight, checked before each deploy) — for verification *without* that request,
-prefer `wrangler dev --remote`, which exercises the real runtime without
-touching production. `POST /start` remains blocked by the permission classifier
-here.
+directly this session, three times, on explicit request each time (gate:
+`/state` had no `running` row and `wrangler workflows instances list` showed
+nothing in flight, checked before each deploy — and before the one live schema
+migration, run immediately before its matching deploy with no manual AI call in
+between) — for verification *without* that request, prefer `wrangler dev
+--remote`, which exercises the real runtime without touching production.
+`POST /start` remains blocked by the permission classifier here.
 
 ---
 
