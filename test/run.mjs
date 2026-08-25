@@ -31,7 +31,7 @@ import {
   leakedCompanies,
   REPORT_SYSTEM,
 } from '../src/prompt.ts';
-import { drain } from '../src/ingest.ts';
+import { drain, wikipediaRawUrl, parseRedirectTarget } from '../src/ingest.ts';
 import { readFileSync } from 'node:fs';
 
 let pass = 0;
@@ -431,6 +431,30 @@ eq('drain: cancels as soon as the cap is crossed — does not keep pulling the r
   pulls, 3);
 
 eq('drain: a null body returns 0 regardless of a cap', await drain(null, 10), 0);
+
+// --- ingest: the Wikipedia soft-redirect guard (bugs.md #16) ---------------
+// MediaWiki auto-follows a #REDIRECT entry when rendering /wiki/Title as
+// HTML, so a page that reads as real, substantial, on-topic text can still
+// be a DIFFERENT article. Length-based validation cannot see this — the raw
+// wikitext can.
+eq('wikipediaRawUrl: a /wiki/ page maps to the raw wikitext endpoint',
+  wikipediaRawUrl('https://en.wikipedia.org/wiki/Science_and_technology_in_New_Zealand'),
+  'https://en.wikipedia.org/w/index.php?title=Science_and_technology_in_New_Zealand&action=raw');
+eq('wikipediaRawUrl: the Australia case from the same bug',
+  wikipediaRawUrl('https://en.wikipedia.org/wiki/Science_and_technology_in_Australia'),
+  'https://en.wikipedia.org/w/index.php?title=Science_and_technology_in_Australia&action=raw');
+eq('wikipediaRawUrl: a non-Wikipedia host is left alone',
+  wikipediaRawUrl('https://startupdaily.net/feed'), null);
+eq('wikipediaRawUrl: a Wikipedia URL that is already the raw endpoint is left alone',
+  wikipediaRawUrl('https://en.wikipedia.org/w/index.php?title=Australia&action=raw'), null);
+eq('wikipediaRawUrl: an invalid URL returns null instead of throwing', wikipediaRawUrl('not a url'), null);
+
+eq('parseRedirectTarget: the exact NZ stub from bugs.md #16 — the run that broke on it',
+  parseRedirectTarget('#REDIRECT [[New_Zealand#Science_and_technology]] {{Redirect category shell|'),
+  'New_Zealand#Science_and_technology');
+eq('parseRedirectTarget: a real article is not a redirect',
+  parseRedirectTarget('Australia is a country comprising the mainland...'), null);
+eq('parseRedirectTarget: empty text is not a redirect', parseRedirectTarget(''), null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

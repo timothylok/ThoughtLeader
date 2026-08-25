@@ -246,6 +246,36 @@ export function freshExcerpts(pieces: string[], budget: number): string[] {
 }
 
 /**
+ * The raw-wikitext counterpart of a Wikipedia `/wiki/Title` URL, or null for
+ * anything else (bugs.md #16).
+ *
+ * `/wiki/Science_and_technology_in_New_Zealand` renders as the FULL, unrelated
+ * New Zealand country article — 1.84 MB — because MediaWiki auto-follows a
+ * `#REDIRECT` entry when serving the pretty HTML view. Extracted length alone
+ * cannot tell "found the topic" from "followed a redirect to a different
+ * one": the wrong article is large and reads as a real result. `?action=raw`
+ * skips that auto-follow and returns the redirect line itself, unrendered.
+ */
+export function wikipediaRawUrl(url: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  if (!/(^|\.)wikipedia\.org$/i.test(u.hostname)) return null;
+  const m = u.pathname.match(/^\/wiki\/(.+)$/);
+  if (!m) return null;
+  return `https://${u.hostname}/w/index.php?title=${encodeURIComponent(decodeURIComponent(m[1]))}&action=raw`;
+}
+
+/** The target of a MediaWiki soft redirect (`#REDIRECT [[Target]]`), or null. */
+export function parseRedirectTarget(rawWikitext: string): string | null {
+  const m = /^\s*#REDIRECT\s*\[\[([^\]]+)\]\]/i.exec(rawWikitext);
+  return m ? m[1].trim() : null;
+}
+
+/**
  * Fixed-length slicing with overlap. Deliberately dumb: no sentence detection,
  * no lookaround regex. Overlap keeps facts from being split across a boundary.
  */

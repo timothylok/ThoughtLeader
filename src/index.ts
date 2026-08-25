@@ -1,7 +1,15 @@
 // @ts-expect-error - bundled as text via the Text rule in wrangler.jsonc
 import LIVE_HTML from '../liverun.html';
 import { num, type AiUsage, type Env, type StartRequest } from './types.ts';
-import { fetchSource, chunk, freshExcerpts, selectNextSources, normalizeUrl } from './ingest.ts';
+import {
+  fetchSource,
+  chunk,
+  freshExcerpts,
+  selectNextSources,
+  normalizeUrl,
+  wikipediaRawUrl,
+  parseRedirectTarget,
+} from './ingest.ts';
 import { recall, remember, chunkKey, findingKey } from './memory.ts';
 import {
   buildPrompt,
@@ -516,6 +524,35 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
   }
 
   if (probe) {
+    // bugs.md #16: extractability and topical relevance are different checks,
+    // and a Wikipedia /wiki/ URL can pass the first while failing the second
+    // invisibly — MediaWiki auto-follows a soft redirect when rendering HTML,
+    // so a page that reads as real, substantial, on-topic text may actually
+    // be a DIFFERENT article. Checked BEFORE the HTML fetch, not after: the
+    // destination article is usually large, so bug #15's byte cap would
+    // reject it first and this check would never run if it came second — the
+    // exact page that caused #16 (`Science_and_technology_in_New_Zealand`)
+    // redirects to one large enough to hit that cap.
+    const rawUrl = wikipediaRawUrl(probe);
+    if (rawUrl) {
+      try {
+        const raw = await fetchSource(rawUrl, num(env.MAX_FETCH_BYTES, 262_144));
+        const target = parseRedirectTarget(raw.text);
+        if (target) {
+          return json({
+            probe,
+            possibleRedirect: true,
+            warning:
+              `${rawUrl} says "#REDIRECT [[${target}]]" — this URL renders the ` +
+              `"${target}" article's HTML, not a page about "${probe}"`,
+          });
+        }
+      } catch {
+        // The raw probe failing is not itself informative; fall through to
+        // the normal HTML fetch below.
+      }
+    }
+
     const t0 = Date.now();
     const doc = await fetchSource(probe, num(env.MAX_FETCH_BYTES, 262_144));
     const fetched = Date.now();
