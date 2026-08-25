@@ -31,6 +31,7 @@ import {
   leakedCompanies,
   REPORT_SYSTEM,
 } from '../src/prompt.ts';
+import { drain } from '../src/ingest.ts';
 import { readFileSync } from 'node:fs';
 
 let pass = 0;
@@ -383,6 +384,53 @@ eq('events section: THE 5b6594b2 REPORT, as it should have read',
 
 eq('report prompt: the model is told the baseline covers one country',
   REPORT_SYSTEM.includes('baseline covers ONE country'), true);
+
+// --- ingest: the HTML CPU cap (bugs.md #15) ---------------------------------
+// HTMLRewriter is a Workers-only global, so the extraction path itself can't
+// run under plain node. `drain`'s cap enforcement has no such dependency —
+// it only needs a generic ReadableStream — so it's tested directly here.
+function streamOf(chunkSizes) {
+  let i = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (i >= chunkSizes.length) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(new Uint8Array(chunkSizes[i++]));
+    },
+  });
+}
+
+eq('drain: no cap — sums every chunk', await drain(streamOf([10, 10, 10])), 30);
+eq('drain: under the cap — sums every chunk, no throw',
+  await drain(streamOf([10, 10, 10]), 100), 30);
+
+let capErr = null;
+try {
+  await drain(streamOf([20_000, 20_000, 20_000]), 40_000);
+} catch (e) {
+  capErr = String(e);
+}
+eq('drain: crossing the cap throws instead of returning a truncated count',
+  capErr?.includes('40000 byte HTML cap'), true);
+
+let pulls = 0;
+const counted = new ReadableStream({
+  pull(controller) {
+    pulls++;
+    controller.enqueue(new Uint8Array(20_000));
+  },
+});
+try {
+  await drain(counted, 40_000);
+} catch {
+  // expected — asserting on `pulls` below
+}
+eq('drain: cancels as soon as the cap is crossed — does not keep pulling the rest of the body',
+  pulls, 3);
+
+eq('drain: a null body returns 0 regardless of a cap', await drain(null, 10), 0);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

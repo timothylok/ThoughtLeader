@@ -12,6 +12,22 @@
 /** Max characters of extracted text kept per source. Bounds the final join cost. */
 const MAX_TEXT_CHARS = 60_000;
 
+/**
+ * CPU-safety cap for the HTML path only, enforced against bytes actually
+ * streamed through HTMLRewriter — not the declared `Content-Length`, which
+ * chunked responses often omit or understate. MAX_TEXT_CHARS does not bound
+ * this cost: it stops `parts.push()`, not the parser, which keeps consuming
+ * the rest of the body regardless.
+ *
+ * Measured (bugs.md #15, `wrangler tail --format json` cpuTime): a 1.84MB
+ * page cost 241ms, three other large pages ~20ms, a 70KB page 11ms — against
+ * a 10ms Free-plan ceiling. The runtime kills the isolate mid-parse on that
+ * limit; it is not a catchable JS exception, so the only fix is to never
+ * start parsing a body that could get there. Capped well under the 70KB
+ * point that was already over, not at it.
+ */
+const MAX_HTML_BYTES = 40_000;
+
 /** Content-bearing elements. Everything else contributes no text. */
 const CONTENT_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, li, td, th, blockquote, pre, dd, dt';
 
@@ -89,6 +105,12 @@ export async function fetchSource(url: string, maxBytes: number): Promise<Extrac
     };
   }
 
+  // Same check as above, tightened to the HTML-specific ceiling — catches
+  // the common case cheaply when the server does send a Content-Length.
+  if (declared > MAX_HTML_BYTES) {
+    throw new Error(`source too large: ${declared} bytes > ${MAX_HTML_BYTES} HTML cap`);
+  }
+
   const parts: string[] = [];
   const links = new Set<string>();
   let total = 0;
@@ -130,7 +152,10 @@ export async function fetchSource(url: string, maxBytes: number): Promise<Extrac
     .transform(res);
 
   // Handlers only fire as the body streams; consuming it drives extraction.
-  const bytes = await drain(rewritten.body);
+  // Capped live: a server that sends no Content-Length (or understates one
+  // on a chunked response) must not be able to run HTMLRewriter past the
+  // point a declared header would have caught.
+  const bytes = await drain(rewritten.body, MAX_HTML_BYTES);
 
   return {
     text: denoise(normalize(parts.join(''))),
@@ -163,8 +188,16 @@ function denoise(text: string): string {
   return kept.join('\n');
 }
 
-/** Consume a stream without materialising it, returning byte count. */
-async function drain(body: ReadableStream | null): Promise<number> {
+/**
+ * Consume a stream without materialising it, returning byte count.
+ *
+ * With `cap` set, cancels the reader and throws as soon as cumulative bytes
+ * exceed it — bounding CPU spent pulling a transform (e.g. HTMLRewriter)
+ * through the rest of a body that a declared Content-Length either didn't
+ * cover or wasn't sent at all. Exported so the cap logic is testable without
+ * the Workers-only HTMLRewriter global (bugs.md #15).
+ */
+export async function drain(body: ReadableStream | null, cap?: number): Promise<number> {
   if (!body) return 0;
   const reader = body.getReader();
   let bytes = 0;
@@ -172,6 +205,10 @@ async function drain(body: ReadableStream | null): Promise<number> {
     const { done, value } = await reader.read();
     if (done) break;
     bytes += value.byteLength;
+    if (cap !== undefined && bytes > cap) {
+      await reader.cancel();
+      throw new Error(`source too large: exceeded ${cap} byte HTML cap while streaming`);
+    }
   }
   return bytes;
 }
