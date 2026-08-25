@@ -1,3 +1,95 @@
+# Session handoff — session 13, 2026-08-25
+
+## Where things stand — 2026-08-25 14:35 NZST
+
+**Live:** `$WORKER_URL` (see local `.env`) · version **`7f27de2f`** · `tsc --noEmit` clean ·
+**104/104 tests pass** (5 new this session) · **nothing in flight**.
+
+**Crons unchanged:** `*/30 * * * *` watchdog · `0 15` **and** `0 16` daily.
+
+**Sources: 1**, unchanged — `startupdaily.net/feed`. **Ledger: 7 events, unchanged.**
+Three daily runs since session 12 (`0255dcba` 08-23, `84728ae6` 08-24, `3584b53e`
+08-25), all 1 iteration, `sources-exhausted`, all "None today." — nothing new to
+report, not a symptom of anything broken. Spend 294–320 neurons/day against 10,000,
+same shape as session 12 predicted.
+
+**Bug #39 held.** No baseline-clearance claims since the country-scope fix — there
+were no new events for it to misclear, but the report shape (`## New events` /
+`## Round size vs baseline (B3)` / `## Divergence`) rendered correctly and empty
+across all three runs.
+
+## Bug #15 closed — the HTML CPU cap, code half
+
+Session 12 left this the oldest open item: `en.wikipedia.org/wiki/…` and similar
+large HTML pages cost 20–241ms CPU against a 10ms Free-plan ceiling, a **runtime
+abort**, not a catchable JS exception — three retries, then the step (and
+potentially the run) dies. The only guard on record checked the *declared*
+`Content-Length` against a 256KB cap, and neither real failing page ever sends
+that header, so it never fired. Full writeup, verification table, and the
+"code half vs. curation half" reasoning are in `bugs.md` #15; the short version:
+
+- `MAX_HTML_BYTES = 40_000` in `ingest.ts`, checked against the declared header
+  where present, and — the part that actually closes the bug — enforced **live
+  against bytes actually streamed** through HTMLRewriter via `drain()`, which now
+  cancels the reader and throws once crossed.
+- The throw lands in the existing `try/catch` around `fetchSource` in
+  `workflow.ts`, already exercised by the declared-length check — so this is a
+  clean, catchable failure on the first attempt, not a new failure mode.
+- **Verified against the real Workers runtime without deploying**
+  (`wrangler dev --remote --port 8791`, killed cleanly after — `workerd.exe`
+  respawned under a second parent PID the first `taskkill` missed, same shape as
+  bugs.md #26, caught by re-checking `netstat`): the exact URL that killed run
+  `98adcf63` now returns the new error in ~5s wall time (network, not CPU)
+  instead of crashing. A second large page hits the same live-streaming path —
+  **neither real failing page sends a Content-Length**, so the header-only
+  version of this fix (the "obvious" one) would have caught neither.
+- **Then verified again in production** after deploying `7f27de2f`, by re-probing
+  the same URL live: same clean error, `neuronsToday` unchanged (the probe path
+  spends nothing).
+- **Not verified:** an actual `cpuTime` figure. `wrangler dev --remote` doesn't
+  expose it the way `wrangler tail --format json` did for the original
+  measurement — that needs a live production tail, which wasn't done this
+  session. The byte cap is chosen with real margin under the measured 70KB/11ms
+  knee, not a re-derivation of the 10ms ceiling itself.
+
+**What's still open from the original bug:** the *curation* half — Wikipedia's
+`?action=raw` yields more text at ~1ms — remains a quality recommendation, not
+applied. It was never going to close the bug alone: nothing stopped a future seed
+or a followed link (`MAX_SOURCE_DEPTH`) from reintroducing large HTML, which is
+why the fix had to live in code rather than in which sources happen to be curated
+today.
+
+## 👉 Start here next session
+
+1. **Bug #16 — source validation confirms extractability, not relevance.** The
+   next-oldest open item, same shape of gap as #15: `startupdaily.net/feed` was
+   checked for "does it fetch," never for "is it what the goals actually need."
+   Not started this session.
+2. **Get a real `cpuTime` number for the #15 fix, opportunistically.** Next time
+   `wrangler tail --format json` is open for something else, probe a large HTML
+   page and confirm the cap fires well under 10ms rather than just "doesn't
+   crash." Not urgent enough to open a tail session solely for this.
+3. **Watch whether the ledger stays quiet.** Three straight empty days is
+   expected shape for one RSS source, not yet a symptom — but there is still no
+   second daily AU/NZ funding feed (open since session 6), so a genuinely stale
+   source and a genuinely quiet market currently look identical from here.
+4. **Still open, unchanged:** #16, #20 (the allocation window, mitigated not
+   fixed), #17/#19 (retry-path accounting, still never exercised by a real
+   retry — over two weeks of clean runs now), the NZ brief question,
+   `qwen3-embedding-0.6b` (deprioritised).
+
+**Standing rules:** commit only when asked · push only when asked (still not done
+this session — commits are local on `main`) · secret scan gates the push ·
+**never deploy inside the 16:00Z window**, and the pre-deploy check must *exit*,
+not print · `wrangler secret put` counts as a deploy · `wrangler deploy` ran
+directly this session on explicit request (gate: `/state` had no `running` row
+and `wrangler workflows instances list` showed nothing in flight, checked before
+touching production) — for verification *without* that request, prefer
+`wrangler dev --remote`, which exercises the real runtime without touching
+production. `POST /start` remains blocked by the permission classifier here.
+
+---
+
 # Session handoff — session 12, 2026-08-22
 
 ## Where things stand — 2026-08-22 09:55 NZST
