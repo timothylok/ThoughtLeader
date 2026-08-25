@@ -546,7 +546,10 @@ byte cap enforced on the stream is an invariant.
 
 ## Bug 16 — Source validation confirmed extractability, not topic
 
-**Severity:** 🟠 Research quality · **Status:** **Open**
+**Severity:** 🟠 Research quality · **Status:** ✅ **Guard added & deployed 2026-08-25**
+— see "Fix (applied)" below. The underlying gap is a manual-vetting process, not
+code the pipeline runs unattended, so this closes the specific failure mode
+observed, not the general class (see "What this does not fix").
 
 **How it showed up.** Chasing bug #15, `?action=raw` on
 `Science_and_technology_in_New_Zealand` returned **95 characters**:
@@ -574,10 +577,48 @@ ask *"is the returned text about the topic claimed?"*
 stated purpose, not just its length. `?action=raw` makes redirects visible in one
 line, so probe the raw endpoint first even when ingesting HTML.
 
+**Fix (applied).** There is no automated seed-vetting pipeline to patch — sources
+come from `control.daily_brief`, edited by hand, and the loop trusts whatever URL
+is there. The failure mode this bug actually describes happened at the manual
+probing step (`POST /step {"probe": url}`), so that is where the guard lives.
+`wikipediaRawUrl()` + `parseRedirectTarget()` (`ingest.ts`) detect a MediaWiki
+soft redirect from a `/wiki/Title` URL, and `/step`'s probe branch checks it
+**before** the HTML fetch — not after, because the destination article is
+usually large enough to hit bug #15's byte cap, which would swallow the
+`fetchSource` call before any redirect check downstream of it ever ran. That
+ordering mistake was caught by re-running the fix against the real failing URLs
+rather than trusting the first pass: the initial version checked *after* the
+HTML fetch and never fired on either real case, because #15's cap threw first.
+
+**Verified 2026-08-25** against `wrangler dev --remote` (no deploy needed) and
+then production (`7f27de2f` → redeployed with this fix), against the exact two
+pages named above:
+
+| Probe | Result |
+|---|---|
+| `Science_and_technology_in_New_Zealand` | `possibleRedirect: true`, names the `New_Zealand#Science_and_technology` target — no HTML fetch attempted |
+| `Science_and_technology_in_Australia` | same, target `Australia#Science and technology` |
+| `wiki/Australia` (real article, not a redirect) | falls through to the normal HTML path — hits #15's cap as expected, no false `possibleRedirect` |
+| `startupdaily.net/feed` (the live production source) | untouched — not a `wikipedia.org` URL, guard never runs |
+
+**What this does not fix.** This is a Wikipedia-specific pattern match, not a
+general relevance checker — it catches the exact failure mode that broke run
+`98adcf63` and nothing broader. It does not validate that a *non-redirecting*
+page is actually on-topic (a real, on-topic-sounding article can still be the
+wrong scope), and it does nothing for a future non-Wikipedia source that turns
+out to be off-topic. The standing open work — finding a second daily AU/NZ
+funding feed — will still need the same by-hand relevance check bug #16
+originally called for; this guard only removes the one specific trap that
+already caused damage.
+
 **Lesson.** CLAUDE.md §5 says to test every source through the actual pipeline.
 That caught the bot-blocked half of the seed list. It did not catch a source that
 works perfectly and is about something else. **Extractability and relevance are
 two separate validations, and passing the first one loudly hides the second.**
+And once more (CLAUDE.md §9, §12): the first version of this fix was verified
+against the wrong ordering relative to bug #15 and silently did nothing on
+either real case — re-running it against the actual failing URLs, not just
+`npm test`, is what caught that.
 
 ---
 
