@@ -458,7 +458,8 @@ and a fix verified against the half you changed will report success.
 
 ## Bug 15 — Large HTML ingest is over the CPU limit and only passed on burst allowance
 
-**Severity:** 🔴 Fatal (intermittent) · **Status:** **Open** (found in run `98adcf63`)
+**Severity:** 🔴 Fatal (intermittent) · **Status:** ✅ **Fixed & deployed 2026-08-25**
+(found in run `98adcf63`)
 
 **How it showed up.** Run `98adcf63` failed at `ingest:11` with
 `Error: Worker exceeded CPU time limit.` — three attempts, 10 s and 20 s apart,
@@ -490,15 +491,56 @@ the loop ran it anyway and *appeared* to work for 40+ iterations across four run
 per-page cost is what varies (~7× between pages), so `ITERATIONS_PER_GEN` is not
 the lever — source selection is.
 
-**Fix (identified).** Prefer plain-text sources. Wikipedia's `?action=raw`
-endpoint returns `text/x-wiki` and parses in the ~1 ms class — and yields **more**
-text than the HTML path (60,000 chars vs 42,826 for `Economy_of_New_Zealand`).
-Small HTML pages (≤70 KB) stay within budget and need no change.
+**Fix (identified, source-curation half — still the right quality move, not
+applied here).** Prefer plain-text sources. Wikipedia's `?action=raw` endpoint
+returns `text/x-wiki` and parses in the ~1 ms class — and yields **more** text
+than the HTML path (60,000 chars vs 42,826 for `Economy_of_New_Zealand`). This
+does not close the bug on its own: nothing stopped a future seed, or a followed
+link (`MAX_SOURCE_DEPTH`), from adding large HTML again, and the CPU-abort is a
+runtime kill, not a JS exception the ordinary fetch try/catch can catch — so the
+invariant has to live in code, not in which sources happen to be curated today.
+
+**Fix (applied, code half).** `MAX_HTML_BYTES = 40_000` in `ingest.ts`, well
+under the 70 KB point already measured over the ceiling. Checked against the
+declared `Content-Length` where present, and — the part that actually closes
+the bug — enforced **live against bytes actually streamed** through
+HTMLRewriter via `drain()`, which now cancels the reader and throws once the
+cap is crossed. Neither real failing page (`Science_and_technology_in_New_Zealand`,
+nor `Australia`, probed again during this fix) sends a Content-Length at all, so
+the header check alone — the "obvious" version of this fix — would have caught
+**neither** real case. The streaming cap is the load-bearing half.
+
+That throw lands in the existing `try { doc = await fetchSource(...) } catch`
+in `workflow.ts`, already exercised by the declared-length check, so a page that
+used to kill the isolate mid-parse and burn all three retries now fails clean
+on the first attempt: `markSourceResult` records it, the run moves on.
+
+**Verified 2026-08-25**, against the real Workers runtime via
+`wrangler dev --remote` (no deploy needed to test), then again against
+production after deploying `7f27de2f`:
+
+| Probe | Before | After |
+|---|---|---|
+| NZ Wikipedia — the exact page that killed `98adcf63` | 3 retries, `Worker exceeded CPU time limit` | Clean caught error, ~5s wall (network, not CPU) |
+| `Australia` (also large, also no Content-Length) | untested | same clean rejection |
+| `example.com/` (tiny HTML) | — | ingests normally, no regression |
+| `startupdaily.net/feed` (the one live source, RSS not HTML) | — | unaffected — skips the HTML path entirely |
+
+**What this does not prove.** No `cpuTime` figure was re-measured this time —
+`wrangler dev --remote` doesn't expose it the way `wrangler tail` did for the
+original measurement, and getting that number means tailing a real production
+request. What's confirmed is behavioural: the exact call that crashed the
+isolate now returns a normal JS error instead. The byte cap is a proxy for CPU
+cost, chosen with real margin under the measured knee, not a re-derivation of
+the 10 ms ceiling itself.
 
 **Lesson.** **Intermittent success is not headroom.** A limit you pass most of the
 time is a limit you have not measured. The repo already recorded that the same
 page measured 229/594/644 ms across runs — that variance *was* the warning, and it
-was read as noise rather than as proximity to a ceiling.
+was read as noise rather than as proximity to a ceiling. And once a limit is a
+runtime abort rather than a catchable exception, the fix has to make the bad
+call impossible to start, not faster to recover from — curation is a policy, a
+byte cap enforced on the stream is an invariant.
 
 ---
 
