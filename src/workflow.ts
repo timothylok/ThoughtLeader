@@ -54,7 +54,7 @@ import {
   failRun,
   isStopRequested,
   meterCall,
-  neuronsToday,
+  neuronsInTrailing24h,
 } from './db.ts';
 
 /**
@@ -341,7 +341,7 @@ export class ResearchLoop extends WorkflowEntrypoint<Env, RunParams> {
             // Read the ledger rather than carrying a total through the iteration:
             // each AI call now writes its own spend as it happens, so the
             // committed table is the only place the true running total exists.
-            const spentToday = await neuronsToday(env.DB);
+            const spentToday = await neuronsInTrailing24h(env.DB);
             if (await isStopRequested(env.DB, runId)) return { verdict: 'stopped', spentToday };
             // Spend guard first among the automatic exits: on a Paid plan this is
             // the only hard stop that exists. Budget alerts do not cap usage.

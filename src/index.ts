@@ -38,7 +38,7 @@ import {
   clearStop,
   failRun,
   finishRun,
-  neuronsToday,
+  neuronsInTrailing24h,
   usageHistory,
   usageByModel,
   meterCall,
@@ -119,7 +119,12 @@ export default {
         case 'GET /usage':
           return json({
             utcDay: new Date().toISOString().slice(0, 10),
-            neuronsToday: await neuronsToday(env.DB),
+            // Field name kept for compatibility (liverun.html reads it) even
+            // though the value is now a trailing-24h sum, not since-midnight —
+            // bugs.md #20: that's the window the guard and Cloudflare both
+            // actually use, and it's the truer answer to "how close to the
+            // budget am I" regardless of what the key is called.
+            neuronsToday: await neuronsInTrailing24h(env.DB),
             dailyBudget: num(env.DAILY_NEURON_BUDGET, 10_000),
             freeAllocation: 10_000,
             // Per model, so this endpoint can be compared directly against
@@ -261,7 +266,7 @@ async function startDailyRun(env: Env): Promise<void> {
     return;
   }
   const budget = num(env.DAILY_NEURON_BUDGET, 10_000);
-  const spent = await neuronsToday(env.DB);
+  const spent = await neuronsInTrailing24h(env.DB);
   if (budget > 0 && spent >= budget) {
     console.log(`[daily] budget reached (${spent.toFixed(0)}/${budget}); skipping`);
     return;
@@ -320,7 +325,7 @@ async function watchdog(env: Env): Promise<void> {
   // The watchdog restarts stalled runs, which would otherwise be a way to
   // spend past the daily budget without any /start call.
   const budget = num(env.DAILY_NEURON_BUDGET, 10_000);
-  if (budget > 0 && (await neuronsToday(env.DB)) >= budget) {
+  if (budget > 0 && (await neuronsInTrailing24h(env.DB)) >= budget) {
     console.log('[watchdog] daily neuron budget reached; not restarting anything');
     return;
   }
@@ -489,7 +494,7 @@ async function search(env: Env, runId: string, q: string): Promise<Response> {
   // `recall` -> `embed` records it on return; adding it again here would
   // double-count (bugs.md #19).
   const { items, neurons } = await recall(env, runId, q, 10);
-  return json({ runId, query: q, matches: items, neurons, spentToday: await neuronsToday(env.DB) });
+  return json({ runId, query: q, matches: items, neurons, spentToday: await neuronsInTrailing24h(env.DB) });
 }
 
 /**
@@ -514,7 +519,7 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
     // This debug path spends real neurons. Unmetered, it is a hole in the guard
     // exactly like /step was before bug #10 — close every path to the resource.
     await meterCall(env.DB, env.REASON_MODEL, raw.usage);
-    const spentToday = await neuronsToday(env.DB);
+    const spentToday = await neuronsInTrailing24h(env.DB);
     return json({
       model: env.REASON_MODEL,
       rawShape: Object.keys(raw as object),
@@ -581,7 +586,7 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
   const n = Number((run as { iterations: number }).iterations) + 1;
 
   const budget = num(env.DAILY_NEURON_BUDGET, 10_000);
-  const already = await neuronsToday(env.DB);
+  const already = await neuronsInTrailing24h(env.DB);
   if (budget > 0 && already >= budget) {
     return json({ error: 'daily neuron budget exhausted', spentToday: already, budget }, 429);
   }
@@ -687,7 +692,7 @@ async function debugStep(request: Request, env: Env, runId: string): Promise<Res
   // /step spends real neurons, so it counts against the same daily budget —
   // otherwise testing is a blind spot in the spend guard. Each call recorded
   // itself as it returned; this only reads the resulting total.
-  const spentToday = await neuronsToday(env.DB);
+  const spentToday = await neuronsInTrailing24h(env.DB);
   // Same grounding as the workflow: only URLs actually seen on a fetched page.
   // Without this, /step would silently bypass the bug #12 fix.
   const { accepted, rejected } = selectNextSources(reasoning.newSources, observedLinks);

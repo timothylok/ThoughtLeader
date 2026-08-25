@@ -53,22 +53,57 @@ CREATE TABLE IF NOT EXISTS control (
   value TEXT NOT NULL
 );
 
--- Neuron spend per UTC day AND model, account-wide across all runs.
--- Cloudflare budget alerts do NOT cap usage and fire a day late, so on a Paid
--- plan this table is the only thing standing between a runaway loop and a bill.
+-- Neuron spend per AI call, account-wide across all runs. Cloudflare budget
+-- alerts do NOT cap usage and fire a day late, so on a Paid plan this table is
+-- the only thing standing between a runaway loop and a bill.
 --
 -- Split per model (bugs.md #23): Cloudflare's analytics reports by model, so a
 -- day-only total can only ever be compared in aggregate — and an exact match on
 -- one model plus a 100% miss on another sums to something that looks like noise.
 -- That is not hypothetical; it is exactly what #21 was, hidden inside a 1.57%
 -- total. Reconciliation has to compare like for like.
+--
+-- One row per call, not per (day, model): the guard has to match what
+-- Cloudflare actually enforces, which is a rolling ~24h window, not a UTC
+-- calendar day (bugs.md #20 — a run failed on a fresh UTC day reading 0 spent
+-- while the platform was still refusing calls against the previous day's
+-- usage). `day` is kept, derived from `at`, purely for the per-day history
+-- queries (`usageHistory`, `usageByModel`) that predate this and the many
+-- `GROUP BY day` reconciliation commands already written into bugs.md/HANDOFF.md.
+-- Migrated on a live table 2026-08-25 (usage_by_day_legacy kept as an archive):
+--   ALTER TABLE usage RENAME TO usage_by_day_legacy;
+--   CREATE TABLE usage (
+--     id      INTEGER PRIMARY KEY AUTOINCREMENT,
+--     at      INTEGER NOT NULL,
+--     day     TEXT NOT NULL,
+--     model   TEXT NOT NULL,
+--     neurons REAL NOT NULL DEFAULT 0,
+--     calls   INTEGER NOT NULL DEFAULT 1
+--   );
+--   CREATE INDEX idx_usage_at ON usage(at);
+--   CREATE INDEX idx_usage_day_model ON usage(day, model);
+--   -- Backfill: one row per pre-migration (day, model) aggregate, timestamped
+--   -- at 23:59:59Z that day rather than a neutral midpoint. Reading old usage
+--   -- as OLDER than it really was can under-count a live trailing-24h sum and
+--   -- authorise spend Cloudflare would refuse (the exact shape of #20); reading
+--   -- it as slightly too RECENT only makes the guard more conservative, which
+--   -- is the safe direction to be wrong in. Irrelevant beyond ~2 days old
+--   -- either way — this only matters for how quickly the most recent day ages
+--   -- out of the window.
+--   INSERT INTO usage (at, day, model, neurons, calls)
+--   SELECT (CAST(strftime('%s', day || 'T23:59:59Z') AS INTEGER) * 1000),
+--          day, model, neurons, calls
+--   FROM usage_by_day_legacy;
 CREATE TABLE IF NOT EXISTS usage (
-  day     TEXT NOT NULL,      -- YYYY-MM-DD (UTC)
-  model   TEXT NOT NULL,      -- Workers AI model id, as passed to AI.run
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  at      INTEGER NOT NULL,      -- ms since epoch (UTC) — the guard's window
+  day     TEXT NOT NULL,         -- YYYY-MM-DD (UTC), derived from `at`
+  model   TEXT NOT NULL,         -- Workers AI model id, as passed to AI.run
   neurons REAL NOT NULL DEFAULT 0,
-  calls   INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (day, model)
+  calls   INTEGER NOT NULL DEFAULT 1
 );
+CREATE INDEX IF NOT EXISTS idx_usage_at ON usage(at);
+CREATE INDEX IF NOT EXISTS idx_usage_day_model ON usage(day, model);
 
 -- One finding per (run, iteration). Without this, a step that fails AFTER the
 -- INSERT but before the step completes will duplicate the row on retry —

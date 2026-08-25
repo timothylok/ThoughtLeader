@@ -377,35 +377,31 @@ export async function meterCall(
   return neurons;
 }
 
-/** Accumulate spend for today against ONE model, and return that model's total. */
-async function addNeurons(
-  db: D1Database,
-  model: string,
-  neurons: number,
-): Promise<number> {
-  const day = utcDay();
-  const row = await db
-    .prepare(
-      `INSERT INTO usage (day, model, neurons, calls) VALUES (?1, ?2, ?3, 1)
-       ON CONFLICT(day, model) DO UPDATE SET neurons = neurons + ?3, calls = calls + 1
-       RETURNING neurons`,
-    )
-    .bind(day, model, neurons)
-    .first<{ neurons: number }>();
-  return row?.neurons ?? 0;
+/** Record one AI call's spend as its own row — never aggregated into an
+ * existing one, so the guard can sum a real trailing window (bugs.md #20). */
+async function addNeurons(db: D1Database, model: string, neurons: number): Promise<void> {
+  const at = Date.now();
+  await db
+    .prepare(`INSERT INTO usage (at, day, model, neurons, calls) VALUES (?1, ?2, ?3, ?4, 1)`)
+    .bind(at, utcDay(at), model, neurons)
+    .run();
 }
 
 /**
- * The guard's number: today's spend across ALL models.
+ * The guard's number: spend across ALL models in the trailing 24 hours from
+ * `at` (default now).
  *
- * Must SUM, not SELECT — the table is now one row per (day, model), so reading a
- * single row would silently report one model's spend as the whole day's and the
- * guard would authorise several times the budget.
+ * A UTC-calendar-day sum is the WRONG window: bugs.md #20 measured that
+ * Cloudflare enforces something closer to a rolling ~24h window, so a guard
+ * keyed on `day` can read 0 right after UTC midnight while the platform is
+ * still refusing calls against yesterday's usage — authorising spend the
+ * provider then rejects mid-run. `usage` is one row per call, so this is a
+ * real sum over the window that matters, not an approximation of one.
  */
-export async function neuronsToday(db: D1Database): Promise<number> {
+export async function neuronsInTrailing24h(db: D1Database, at = Date.now()): Promise<number> {
   const row = await db
-    .prepare(`SELECT COALESCE(SUM(neurons), 0) AS neurons FROM usage WHERE day = ?`)
-    .bind(utcDay())
+    .prepare(`SELECT COALESCE(SUM(neurons), 0) AS neurons FROM usage WHERE at > ?`)
+    .bind(at - 24 * 60 * 60 * 1000)
     .first<{ neurons: number }>();
   return row?.neurons ?? 0;
 }
@@ -425,11 +421,15 @@ export async function usageHistory(db: D1Database, days = 14) {
  * Per-model spend for one UTC day — the shape Cloudflare's `aiInferenceAdaptiveGroups`
  * reports, so `/usage` can be compared against the provider model by model instead
  * of as one aggregate (bugs.md #23). Defaults to today.
+ *
+ * Must GROUP BY, not SELECT — one row per call now, not per (day, model), so
+ * a day with several calls to the same model has several rows to fold together.
  */
 export async function usageByModel(db: D1Database, day = utcDay()) {
   const { results } = await db
     .prepare(
-      `SELECT model, neurons, calls FROM usage WHERE day = ? ORDER BY neurons DESC`,
+      `SELECT model, SUM(neurons) AS neurons, SUM(calls) AS calls
+       FROM usage WHERE day = ? GROUP BY model ORDER BY neurons DESC`,
     )
     .bind(day)
     .all();
