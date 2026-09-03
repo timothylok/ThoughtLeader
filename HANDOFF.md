@@ -16,6 +16,10 @@ forever.
 `maxIterations` **2**, `ITERATION_INTERVAL` **2 minutes** (was 18), `DAILY_NEURON_BUDGET`
 **10000**. **Ledger: 12 events** (was 7 at session 13).
 
+> **Superseded 2026-09-04.** The second seed 403'd on its first run and was dropped;
+> `maxIterations` is back to **1** and sources back to **1**. See open item 2 and
+> `bugs.md` #40. `ITERATION_INTERVAL` stays at 2 minutes but is now inert.
+
 **Seven daily runs since session 13**, 08-27 through 09-02, all `done`, all n=1 in
 30–50 s on `sources-exhausted`, 260–325 neurons/day against 10,000. Three produced
 events (Apate.AI + Airwallex 08-31, Gridsight 09-01, GonGlobal + Drumbeat 09-02); four
@@ -124,10 +128,24 @@ under a minute means iteration 2 never happened *regardless of what `reason` say
 `reason='max-iterations'` (not `sources-exhausted`), two `fetched` rows in `sources`,
 ~550 neurons.
 
-**2. Does `innovationaus` earn its place?** It scored 1/10 and both hits were government
-grants, not startup rounds. The check is whether any ledger row has a `source_url` on that
-domain by **2026-09-10**; if none does, it is costing ~250 neurons/day and 2 min of run
-time for nothing.
+**2. Does `innovationaus` earn its place?** ✅ **CLOSED 2026-09-04 — no. Dropped.**
+It never got as far as the ledger question: run `ecf39c5e` fetched it as `HTTP 403`,
+0 chunks, and `sources` shows **`fetched` 0 / `failed` 9 / `pending` 1 across 10 distinct
+runs** — it has never once been read inside a run. Seed removed and `maxIterations`
+returned to 1 in one `json_set` on `control.daily_brief`, no deploy. Back to
+one source, n=1, `sources-exhausted`, ~300 neurons.
+
+**Bug #40** carries the reusable part: the selection screen runs candidates through
+`POST /step {"probe":…}`, the one context where this source has *always* succeeded
+(3 separate days, 200 / 15.8 KB / 13 chunks), so the screen cannot see the failure that
+disqualifies a seed. **Before adding any seed, read its own run history first** —
+this would have returned `failed 9` before it was written to the brief:
+
+```sql
+SELECT status, count(*) FROM sources WHERE url = '<candidate>' GROUP BY status;
+```
+
+The original ledger check still stands for `startupdaily` and anything added later:
 
 ```sql
 SELECT source_url, count(*) FROM events WHERE first_seen > (strftime('%s','now')-7*86400)*1000 GROUP BY source_url;

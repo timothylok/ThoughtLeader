@@ -2395,3 +2395,56 @@ never landed (lessonlearnt §15).
 **Verified:** 24 new tests (75 → 99), including the exact Vessev row — `other-country`, not
 `within` — an NZ round large enough to breach the AU band still not checked, an unclassified
 row not checked, and `renderEventSection` reproducing what `5b6594b2` should have printed.
+
+---
+
+## Bug 40 — Seed vetting screens on the one path where a failing seed always passes
+
+**Found:** 2026-09-04, checking the first run under session 14's two-source config.
+**Severity:** 🟡 Wasted iteration · **Status:** incident ✅ **fixed 2026-09-04** — seed
+dropped from `control.daily_brief` and `maxIterations` returned to 1 in one `json_set`,
+no deploy; **invariant open** — the vetting path is unchanged.
+
+Session 14 added `innovationaus.com/feed` as a second seed on the strength of a
+`POST /step {"probe":…}` screen: 1/10 funding items, 10 items/day, 15 KB ingest. The
+first run under it, `ecf39c5e` at 2026-09-04 04:00 NZST, fetched it as `HTTP 403`,
+0 chunks. `maxIterations` had been raised to 2 to accommodate it, so iteration 2 then ran
+with `source_url: null` and restated iteration 1's finding verbatim — ~150 neurons and
+~90 s of run time for a duplicate.
+
+**The disqualifying history was already in this repo, as a number.** `sources` has held it
+all along:
+
+```sql
+SELECT status, count(*) FROM sources
+WHERE url = 'https://innovationaus.com/feed' GROUP BY status;
+```
+
+→ **`failed` 9 · `pending` 1 · `fetched` 0**, across 10 distinct runs, `ecf39c5e`
+included. The seed has never once been read inside a run. #22 called it 0/3 on 2026-08-13
+and said the run-vs-probe gap "is now the thing to investigate"; it was dropped at 0/6 on
+2026-08-18; it was re-added on 2026-09-03 and is now **0/10**.
+
+**Why the screen cleared it.** Vetting runs candidates through `POST /step {"probe":url}`,
+which calls the same `fetchSource()` with the same headers from the same Worker — and in
+*that* context this source has never failed: 5/5 in the 2026-08-14 burst, plus session
+14's selection probe and one re-probe on 2026-09-04, each 200 / ~15.8 KB / 13 chunks.
+That is three separate days, so ~3 independent observations rather than 7 (§11). The
+probe and the run are two witnesses that disagree, and vetting only ever asks the one
+that says yes.
+
+**This is §9 and §12 together.** #35 established that a seed must be able to produce a
+ledger row; this one fails a step earlier — it cannot be *read* — and the check meant to
+catch that is structurally incapable of it. A screen that exercises a different code path
+from the thing it screens for has the shape of the treatment that never bound in #24:
+every number it returns is self-consistent, and none of them is about the run.
+
+**What would close the invariant.** Vetting is a manual step, so the fix is a query rather
+than code: before adding any seed, read its own history out of `sources` with the SQL
+above. One command, derived rather than copied (§14), and for this candidate it would
+have returned `failed 9` before the seed was ever written to the brief. **A probe result
+is not admissible evidence that a source works in a run.**
+
+**Still unexplained:** why the run context 403s and the probe context does not. Same
+function, same headers, same Worker, same URL — unchanged since #22 filed it, and now
+cheap to leave open, because with the seed gone it costs nothing.
