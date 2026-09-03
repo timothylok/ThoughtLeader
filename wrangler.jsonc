@@ -53,8 +53,10 @@
     // 0 15  daily research run — the NZDT arm (15:00Z = 04:00 NZDT).
     // 0 16  daily research run — the NZST arm (16:00Z = 04:00 NZST).
     //       Both must match src/index.ts DAILY_CRONS exactly or they never
-    //       fire. A 6-iteration run at ITERATION_INTERVAL=18min takes ~1.8h,
-    //       so the report is written by ~05:50 local either way.
+    //       fire. The daily brief seeds one RSS feed; a non-HTML source
+    //       yields no observed links, so selectNextSources can accept nothing
+    //       and every run exhausts at n=1 in ~30-50s. The report is written by
+    //       ~04:01 local either way. Measured 2026-08-27..09-02, 7/7 runs.
     "crons": ["*/30 * * * *", "0 15 * * *", "0 16 * * *"]
   },
 
