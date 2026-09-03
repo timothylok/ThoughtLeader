@@ -14,7 +14,7 @@ export interface Env {
   MAX_SOURCE_DEPTH: string;
   /** Characters of the current source carried into the prompt. */
   FRESH_CHARS: string;
-  /** Hard stop on neurons spent per UTC day, across all runs. 0 = unlimited. */
+  /** Hard stop on neurons spent in a trailing 24 h, across all runs. 0 = unlimited. */
   DAILY_NEURON_BUDGET: string;
 
   /**

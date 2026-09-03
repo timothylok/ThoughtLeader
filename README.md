@@ -502,7 +502,7 @@ npx wrangler d1 execute research-log --remote --file=./schema.sql
 | `MAX_FETCH_BYTES` | `262144` | Ingest size cap (§4.2). |
 | `RECALL_TOP_K` | `8` | Chunks recalled per iteration. Raising it raises neuron cost. |
 | `FRESH_CHARS` | *(unset → `16000`)* | Characters of the current source carried into the prompt. **Bound by characters, not chunk count** — a count is a newest-N eviction window on a newest-first RSS feed and it silently destroyed a verdict (bugs.md #24). Unset is the normal case; `FRESH_CHARS_DEFAULT` in `workflow.ts` is the one place to change it. |
-| `DAILY_NEURON_BUDGET` | `8000` | **Hard spend stop** per UTC day across all runs (§4.4). Deliberately below the 10,000 allocation — see #20. `0` = unlimited. |
+| `DAILY_NEURON_BUDGET` | `10000` | **Hard spend stop** across all runs, summed over a **trailing 24 h** (§4.4) — the same window Cloudflare enforces, since bugs.md #20 was fixed 2026-08-25. Was `8000` as a mitigation before that. `0` = unlimited. |
 
 ### 3.5 Runbook
 
@@ -782,7 +782,7 @@ together. Keep the product under ~2.5 days.
 "ITERATION_INTERVAL":  "25 minutes",   // 58 iterations/day, inside the neuron budget
 "REASON_MODEL":        "@cf/meta/llama-3.1-8b-instruct",  // ~2x cheaper than 70b
 "MAX_SOURCE_DEPTH":    "0",            // seeds only — model-proposed URLs are usually HTML
-"DAILY_NEURON_BUDGET": "8000",         // hard stop, below the allocation (bugs.md #20)
+"DAILY_NEURON_BUDGET": "10000",        // hard stop; trailing-24h since #20, no margin needed
 ```
 
 and **seed only non-HTML sources**:
@@ -831,17 +831,18 @@ restarting a stalled run repeatedly.
 
 Four layers, innermost first:
 
-1. **`DAILY_NEURON_BUDGET` (set to `8000`) — the real hard stop.** Every AI call is
-   priced by `meterCall()` the moment it returns and accumulated into the D1 `usage`
-   table per UTC day. When the total reaches the budget, the loop terminates with
-   `reason='budget-exhausted'`. Set `0` to disable.
+1. **`DAILY_NEURON_BUDGET` (set to `10000`) — the real hard stop.** Every AI call is
+   priced by `meterCall()` the moment it returns and written to the D1 `usage` table
+   as one row per call. When the **trailing-24 h** total reaches the budget, the loop
+   terminates with `reason='budget-exhausted'`. Set `0` to disable.
 
-   **Why 8000 and not the 10,000 free allocation.** The allocation is *not* enforced
-   on a UTC calendar day — a run at 00:05Z on a fresh day, with the meter reading 0,
-   was refused; a probe at 00:11Z succeeded (bugs.md #20). The evidence points to a
-   rolling ~24 h window, so a calendar-day meter can reset while the platform still
-   holds most of a window against the account. The 2,000-neuron margin means the loop
-   stops itself — *with a report* — before the platform stops it mid-step.
+   **Why the full 10,000 is safe now.** The allocation is *not* enforced on a UTC
+   calendar day — a run at 00:05Z on a fresh day, with the meter reading 0, was
+   refused; a probe at 00:11Z succeeded (bugs.md #20). That was first mitigated by
+   dropping the budget to 8,000, which bought headroom without correcting the shape,
+   and reverted on 2026-08-19. Since 2026-08-25 the guard sums `WHERE at > now - 24h`
+   instead of keying on `utcDay()`, so it and the platform measure the same window —
+   the margin is no longer the thing doing the work.
 
    Note the metering must happen **per call, on return**, not per step: `step.do`
    re-runs its whole closure on retry and Cloudflare bills every attempt, so a

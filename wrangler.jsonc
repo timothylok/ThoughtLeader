@@ -99,8 +99,10 @@
     // 0 disables model-proposed sources (seeds only).
     "MAX_SOURCE_DEPTH": "2",
 
-    // HARD SPEND STOP. Neurons per UTC day across all runs; the loop terminates
-    // with reason='budget-exhausted' when reached.
+    // HARD SPEND STOP. Neurons summed over a TRAILING 24 H across all runs —
+    // neuronsInTrailing24h(), `WHERE at > now - 24h`, not a UTC calendar day
+    // (bugs.md #20, fixed 2026-08-25). The loop terminates with
+    // reason='budget-exhausted' when reached.
     //
     // Set to the full 10000 free allocation on 2026-08-18, by request.
     //
@@ -114,8 +116,11 @@
     // cut off mid-flight by AiError 4006 and loses its report, where at 8000 it
     // terminated itself first and still wrote one.
     //
-    // A daily run costs ~1100-1200 neurons, so the headroom is ~8x either way;
-    // this matters when several runs or a session of /step probes share a day.
+    // Cost per daily run has moved as the brief shrank: ~1100-1200 neurons when
+    // this was written (6 iterations), then 260-325 measured across 7 one-seed
+    // runs 2026-08-27..09-02, and ~550 expected at two seeds. Headroom is 18x+
+    // either way; it matters when several runs or a session of /step probes
+    // share a window.
     //
     // Cloudflare budget alerts do NOT cap usage — this is the only real stop.
     // Set 0 for unlimited (you are then trusting maxIterations alone).

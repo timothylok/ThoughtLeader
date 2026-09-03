@@ -1339,6 +1339,11 @@ can authorise spending the platform refuses.
 a report — before Cloudflare stops it. This is mitigation; the window shape is still
 wrong, and the real fix (trailing-24h metering) needs per-hour rows.
 
+> **Superseded.** Kept as the record of what was decided on 2026-08-12. The 8000 was
+> reverted to 10000 on 2026-08-19 (`34b666e`) by request, and the real fix landed
+> 2026-08-25: `usage` became one row per AI call and the guard now sums a trailing
+> 24 h. Current budget is **10000**. Do not read this block as live config.
+
 **Operational rule that came out of it: probe the condition, don't trust the clock.**
 This file previously asserted the reset time as fact; the verification run was armed
 against that assertion and was refused.
@@ -1349,7 +1354,7 @@ against that assertion and was refused.
 
 | # | Bug | Severity | Note |
 |---|---|---|---|
-| **20** | The allocation is not a UTC calendar day | 🟠 Guard shape | **Mitigated, not fixed.** Budget is 8,000 of 10,000. Real fix = meter a trailing 24 h, which needs per-hour rows in `usage` instead of one row per day |
+| **20** | The allocation is not a UTC calendar day | ✅ Fixed 2026-08-25 | The trailing-24 h fix was applied: `usage` is one row per AI call and `neuronsToday()` → `neuronsInTrailing24h()`. Budget is back to the full 10,000; the 8,000 mitigation was reverted 2026-08-19 and is no longer needed |
 | **15** | Large HTML ingest is over the CPU limit | 🔴 Fatal (intermittent) | **Resolved by source policy** (decision 1), not by code. Nothing stops a future HTML seed being added — the guard is the probe habit in #16 |
 | **16** | Source validation confirmed extractability, not topic | 🟠 Research quality | Both Wikipedia "Science and technology in X" URLs are redirects to country articles — re-probed 2026-08-17, still a 46-char `#REDIRECT` stub. Fix is a probe habit: check `?action=raw` first |
 | **25** | A finding is attributed to a source that supplied none of its content | 🔴 False attribution | **Open, new.** #22's invariant one branch away — recall injects another source's chunks and the finding is stamped with *this* iteration's URL. Confirmed on `dc0a0b39`/`8772de4e`, and on the flagship $248.5bn figure cited to Wikipedia by every report |
@@ -1425,7 +1430,7 @@ JS and is unaffected — don't chase that as a code bug.
 |---|---|---|
 | `ITERATION_INTERVAL` | `2 minutes` | Sets the daily run's wall-clock length: 2 iterations ≈ 3 min. Floor is Vectorize's 15–30 s async insert lag |
 | `ITERATIONS_PER_GEN` | `8` | Bounded by **subrequests**, not steps (bugs.md #1) |
-| `DAILY_NEURON_BUDGET` | `8000` | Applied 2026-08-12. NOT 10000: the allocation is not a UTC calendar day (bugs.md #20), so the guard must stop the run before the platform does |
+| `DAILY_NEURON_BUDGET` | `10000` | Restored from 8000 on 2026-08-19 (`34b666e`) by request, then made safe on 2026-08-25 when bugs.md #20 was fixed properly: `neuronsInTrailing24h()` meters a rolling 24 h, so the guard and the platform now measure the same window and the 2,000-neuron margin is no longer load-bearing |
 | `MAX_SOURCE_DEPTH` | `2` | Grounded. **Effectively 0 under decision 1** — plain text has no links to harvest |
 | `REASON_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | |
 | `EMBED_MODEL` | `@cf/baai/bge-small-en-v1.5` | 384 dims, must match the index |
