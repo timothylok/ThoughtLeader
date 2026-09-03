@@ -1,3 +1,159 @@
+# Session handoff — session 14, 2026-09-03
+
+## Where things stand — 2026-09-03 15:41 NZST
+
+**Live:** `$WORKER_URL` (see local `.env`) · version **`9f7ed35c`** · `tsc --noEmit` clean ·
+**112/112 tests pass** (none added — this session changed config and documentation, not
+logic) · **nothing in flight**.
+
+**Crons unchanged:** `*/30 * * * *` watchdog · `0 15` **and** `0 16` daily. Worth
+recording, because it decided a design question below: the Free plan allows **5 Cron
+Triggers per _account_**, not per Worker ([limits](https://developers.cloudflare.com/workers/platform/limits/)).
+This account has one Worker holding all 3, so there are exactly 2 spare — account-wide,
+forever.
+
+**Sources: 2** — `startupdaily.net/feed` plus **`innovationaus.com/feed` added today**.
+`maxIterations` **2**, `ITERATION_INTERVAL` **2 minutes** (was 18), `DAILY_NEURON_BUDGET`
+**10000**. **Ledger: 12 events** (was 7 at session 13).
+
+**Seven daily runs since session 13**, 08-27 through 09-02, all `done`, all n=1 in
+30–50 s on `sources-exhausted`, 260–325 neurons/day against 10,000. Three produced
+events (Apate.AI + Airwallex 08-31, Gridsight 09-01, GonGlobal + Drumbeat 09-02); four
+reported "no new funding events". Cloudflare's invocation analytics show zero errored
+invocations across the whole window.
+
+> **Nothing in this session's config change has run yet.** The first run under two
+> seeds, `maxIterations 2` and the 2-minute interval is **2026-09-04 04:00 NZST**
+> (`16:00Z` 09-03). Everything below marked *expected* is derived from the code path,
+> not measured.
+
+## What changed
+
+Four commits, all on `main`, all pushed and deployed (`9f7ed35c`).
+
+| Commit | Change |
+|---|---|
+| `ea5dca4` | Corrected the stale 6-iteration/1.8 h justification on the cron triggers |
+| `a96af21` | Recorded the two-source run shape |
+| `8c19076` | `ITERATION_INTERVAL` 18 min → 2 min |
+| `2776889` | Corrected the stale `8000` budget and the "per UTC day" guard shape |
+
+**The only behaviour changes are two D1 writes and one var.** The second seed and
+`maxIterations 1 → 2` live in `control.daily_brief` and needed no deploy; the interval
+is in `wrangler.jsonc`. Everything else was documentation catching up to code.
+
+### The second seed, and why the cap had to move with it
+
+`workflow.ts:351` checks `n >= maxIterations` **before** `pendingSourceCount`, so at a
+cap of 1 a second seed would have sat `pending` forever while the run still ended at
+n=1 — a source that is configured, never read, and reports nothing wrong. Both fields
+went in one `json_set` so there was never an inconsistent window.
+
+Selection was probed through `POST /step {"probe":…}`, not assumed. Screen was *funding
+language **and** a dollar amount, per 10 items*, run identically against the incumbent as
+a control:
+
+| Feed | Score | Cadence | Ingest |
+|---|---|---|---|
+| `startupdaily.net` *(incumbent)* | **3/10** | 5/day | 13 KB |
+| `innovationaus.com` **(added)** | 1/10 | 10/day | 15 KB |
+| `smartcompany.com.au` | 0/10 | 10/day | 19 KB |
+| `businessdesk.co.nz` | 0/10 | 21/day | 26 KB |
+| `nzentrepreneur.co.nz` | 1/10 | **0.1/day** | 88 KB |
+
+Rejected on the way: `crunchbase` 403, `caffeinedaily.co.nz` dead, `itnews`/`nzherald`/
+`reseller` 404, `scoop.co.nz` 202 with zero bytes, `idealog` 0.9/day, `stockhead`
+965 KB against a 256 KB cap. **That column is one snapshot of ~10 items per feed taken
+2026-09-03 — nothing varied, so it ranks them and does not establish 0/10 as a property
+of any feed** (CLAUDE.md §11).
+
+**No NZ feed passed.** Every NZ candidate was either general business news scoring 0/10
+or too slow to matter. The ledger is AU 6 / NZ 2 / unknown 4, so NZ remains the thin
+side and this session did not fix it.
+
+### Why `ITERATION_INTERVAL` dropped, and what it costs
+
+18 min was sized for long-horizon runs (~79 iterations/day, just inside the free
+allocation). At two iterations exactly one sleep runs, so pacing bought nothing but
+~19 minutes of wall clock. 2 min rather than lower because **Vectorize inserts are async
+by 15–30 s** — below that, iteration *n* cannot recall what *n−1* wrote. D1 dedupe is
+unaffected either way (the "already recorded" list is read from the `events` table, not
+from recall), so the exposure was prompt context, not duplicate rows. The 15–30 s figure
+came from a different workload and has not been re-measured here.
+
+**This is a global lever.** `POST /start` still defaults to `maxIterations: 20`, and such
+a run will now burn its allocation in ~40 min rather than ~6 h. Total spend is unchanged
+— `DAILY_NEURON_BUDGET` is checked every iteration — but the rate is not. Raise the
+interval before any long manual run.
+
+### Why a second cron was considered and rejected
+
+The alternative to a second seed was a separate daily cron for the second feed. Rejected
+on three grounds, recorded so it is not re-proposed:
+
+- **Cost.** A second job at a fixed *local* hour needs two arms for DST, taking the
+  account from 3/5 to 5/5 permanently.
+- **`DAILY_LAST_RUN_KEY` is a single global day-claim** (`src/index.ts:259`). A second
+  job firing the same day sees the day already claimed and returns without running. It is
+  what makes the cron idempotent against double-fires and it is not per-job. `DAILY_BRIEF_KEY`
+  and the offset-keyed gate are single-job in the same way — this is a refactor, not config.
+- **It buys little.** Source-level isolation already exists (`markSourceResult` records a
+  failed fetch and the loop continues), and two reports a day for one market dilutes the
+  daily delta.
+
+### Documentation corrections
+
+`HANDOFF.md` contradicted itself: line 105 recorded bug #20 as closed by the trailing-24 h
+fix while the bug table still read *"Mitigated, not fixed. Budget is 8,000 of 10,000."*
+Verified history: 8000 applied 2026-08-12, reverted to 10000 on 2026-08-19 (`34b666e`) by
+request, genuinely fixed 2026-08-25 by `neuronsInTrailing24h()`.
+
+Corrected everywhere the text asserted **current** config — both README tables, the §4.4
+safeguards block, the recommended Free-plan profile, the HANDOFF config table and bug-20
+row, and two places describing a guard window the code abandoned nine days earlier:
+`wrangler.jsonc` ("Neurons per UTC day") and `src/types.ts`'s `Env` JSDoc.
+
+Dated entries at HANDOFF 105, 697, 867, 913, 1200 and 1338 were **left as written** —
+they record what was true on the day, including measurements taken against the 8,000
+budget. The 2026-08-12 block carries a `> **Superseded.**` note instead of an edit.
+
+## Open — carried into session 15
+
+**1. Verify tonight's run. Check duration first.** ~3 min means both iterations ran;
+under a minute means iteration 2 never happened *regardless of what `reason` says*. Then:
+`reason='max-iterations'` (not `sources-exhausted`), two `fetched` rows in `sources`,
+~550 neurons.
+
+**2. Does `innovationaus` earn its place?** It scored 1/10 and both hits were government
+grants, not startup rounds. The check is whether any ledger row has a `source_url` on that
+domain by **2026-09-10**; if none does, it is costing ~250 neurons/day and 2 min of run
+time for nothing.
+
+```sql
+SELECT source_url, count(*) FROM events WHERE first_seen > (strftime('%s','now')-7*86400)*1000 GROUP BY source_url;
+```
+
+**3. A six-hour hole in the watchdog's invocation record.** `workersInvocationsAdaptive`
+shows ~2 invocations/hour as expected, except **2026-08-28 19:00Z → 08-29 00:59Z, six
+consecutive hours at zero** (~12 missed fires), plus scattered single-fire hours. Cannot
+be resolved with the data available: the watchdog writes nothing to D1 unless it acts, so
+analytics is the only witness, and a missed Cron Trigger and an analytics ingestion gap
+look identical. **No consequence either way** — its trigger is a run stalled >2 h with work
+queued, and the current shape terminates in minutes. Recorded rather than fixed; adding a
+heartbeat row would prove liveness for a stall the config cannot currently produce.
+
+**4. Report leakage is measured, contained, and still ~50%.** Two of the three non-empty
+findings this week named already-recorded ledger companies (`leaked` = `["Gridsight",
+"Apate.AI"]` 09-02, `["Apate.AI","Airwallex"]` 09-01). **The delivered report is unaffected**
+— both it and the Discord push are built from `eventsForRun`, not from the model's prose,
+and both runs' reports were checked and contain only genuinely new events. This is
+bugs.md #37 continuing to hold at roughly the rate it was filed at. Do not build a filter
+without re-reading #28 first.
+
+**5. NZ coverage is unsolved**, not deferred by choice. See the feed table above.
+
+---
+
 # Session handoff — session 13, 2026-08-25
 
 ## Where things stand — 2026-08-25 16:10 NZST
