@@ -495,7 +495,7 @@ npx wrangler d1 execute research-log --remote --file=./schema.sql
 
 | Var | Default | Notes |
 |---|---|---|
-| `ITERATION_INTERVAL` | `18 minutes` | Pacing. Lower = faster = costs money past the free tier. |
+| `ITERATION_INTERVAL` | `2 minutes` | Pacing. Floor is ~1 min: Vectorize inserts lag 15–30 s, so a shorter gap means iteration *n* cannot recall what *n−1* wrote. Was 18 min, sized for long-horizon runs; the daily job is 2 iterations, so pacing only bought wall-clock. Raise it again before any long manual run — this is global, not per-job. |
 | `REASON_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Swap to `@cf/meta/llama-3.1-8b-instruct` for ~2× throughput, lower quality. |
 | `EMBED_MODEL` | `@cf/baai/bge-small-en-v1.5` | 384 dims. Must match the index. |
 | `ITERATIONS_PER_GEN` | `8` | Bounded by **subrequests, not steps** — a resumed instance accumulates them across iterations in one invocation (bugs.md #1). |
@@ -772,8 +772,8 @@ Everything else has at least an order of magnitude of headroom — except Vector
 chunks before pruning is required (§4.4).
 
 **Retention interacts with pacing.** A generation must finish inside the 3-day
-window, so `ITERATIONS_PER_GEN × ITERATION_INTERVAL < 72 h`. At the current 8 × 18
-min = 2.4 h there is ample margin; the constraint only bites if both are raised
+window, so `ITERATIONS_PER_GEN × ITERATION_INTERVAL < 72 h`. At the current 8 × 2
+min = 16 min there is ample margin; the constraint only bites if both are raised
 together. Keep the product under ~2.5 days.
 
 #### Recommended Free-plan profile

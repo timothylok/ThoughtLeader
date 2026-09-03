@@ -1369,9 +1369,12 @@ Fixed and verified: **#22**, **#23** (session 4, both confirmed in production on
 
 ## ✅ The daily schedule — BUILT and verified 2026-08-12
 
-**Fires `0 16 * * *` = 04:00 NZST.** A 6-iteration run at `ITERATION_INTERVAL=18min`
-takes ~1.8h, so the report is written by ~05:50 NZST. Cron Triggers are **UTC only**
-— no DST — so this becomes 05:00 NZDT in summer.
+**Fires `0 16 * * *` = 04:00 NZST.** Superseded 2026-09-03: this said a 6-iteration
+run at `ITERATION_INTERVAL=18min` takes ~1.8h with the report by ~05:50 NZST. No run
+ever had that shape — 7/7 over 2026-08-27..09-02 ran n=1 in ~40s. The brief now seeds
+two feeds at maxIterations 2 and the interval is 2 min, so expect ~3 min and a report
+by ~04:04 NZST. Cron Triggers are **UTC only** — no DST — so both arms are registered
+and the offset-keyed gate in `src/index.ts` picks the one that is 04:00 local.
 
 - `DAILY_CRON` in `src/index.ts` **must match** the `wrangler.jsonc` string exactly.
   A mismatch does not error; the cron silently routes to the watchdog instead.
@@ -1420,7 +1423,7 @@ JS and is unaffected — don't chase that as a code bug.
 
 | Var | Value | Note |
 |---|---|---|
-| `ITERATION_INTERVAL` | `18 minutes` | Sets the daily run's wall-clock length: 6 iterations ≈ 1.8 h |
+| `ITERATION_INTERVAL` | `2 minutes` | Sets the daily run's wall-clock length: 2 iterations ≈ 3 min. Floor is Vectorize's 15–30 s async insert lag |
 | `ITERATIONS_PER_GEN` | `8` | Bounded by **subrequests**, not steps (bugs.md #1) |
 | `DAILY_NEURON_BUDGET` | `8000` | Applied 2026-08-12. NOT 10000: the allocation is not a UTC calendar day (bugs.md #20), so the guard must stop the run before the platform does |
 | `MAX_SOURCE_DEPTH` | `2` | Grounded. **Effectively 0 under decision 1** — plain text has no links to harvest |

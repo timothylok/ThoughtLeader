@@ -57,7 +57,7 @@
     //       non-HTML source yields no observed links, so selectNextSources
     //       accepts nothing and no third source is ever queued. Expect n=2,
     //       terminating on max-iterations, with one ITERATION_INTERVAL sleep
-    //       between the two: ~19min wall clock, report by ~04:20 local.
+    //       between the two: ~3min wall clock, report by ~04:04 local.
     //       UNVERIFIED — the one-seed shape was measured 7/7 over
     //       2026-08-27..09-02 at n=1 in ~40s; the second seed was added
     //       2026-09-03 and has not run yet. Confirm against the first
@@ -66,9 +66,20 @@
   },
 
   "vars": {
-    // Pacing. 18 min keeps ~79 iterations/day inside the free 10k neuron/day
-    // budget. Lower this and you will pay past the free tier. See README §4.1.
-    "ITERATION_INTERVAL": "18 minutes",
+    // Pacing between iterations. Was 18 min, which sized the gap for a
+    // long-horizon run: ~79 iterations/day, just inside the free 10k
+    // neuron/day budget. The daily job no longer has that shape — it is two
+    // seeds at maxIterations 2, so exactly one sleep runs and pacing buys
+    // nothing but wall-clock. 2 min is the floor set by Vectorize, whose
+    // inserts are async by 15-30s: shorter and iteration n cannot recall what
+    // n-1 wrote. D1 dedupe is unaffected either way — the "already recorded"
+    // list is read from the events table, not from recall.
+    //
+    // This is a GLOBAL lever, not a daily-job one. A manual POST /start still
+    // defaults to maxIterations 20 and will now burn its allocation in ~40 min
+    // rather than ~6 h. Total spend is still capped by DAILY_NEURON_BUDGET,
+    // which is checked every iteration — only the rate changed. See README §4.1.
+    "ITERATION_INTERVAL": "2 minutes",
 
     // Swap to @cf/meta/llama-3.1-8b-instruct for ~2x throughput, lower quality.
     "REASON_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
