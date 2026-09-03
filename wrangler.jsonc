@@ -53,10 +53,15 @@
     // 0 15  daily research run — the NZDT arm (15:00Z = 04:00 NZDT).
     // 0 16  daily research run — the NZST arm (16:00Z = 04:00 NZST).
     //       Both must match src/index.ts DAILY_CRONS exactly or they never
-    //       fire. The daily brief seeds one RSS feed; a non-HTML source
-    //       yields no observed links, so selectNextSources can accept nothing
-    //       and every run exhausts at n=1 in ~30-50s. The report is written by
-    //       ~04:01 local either way. Measured 2026-08-27..09-02, 7/7 runs.
+    //       fire. The daily brief seeds two RSS feeds at maxIterations 2; a
+    //       non-HTML source yields no observed links, so selectNextSources
+    //       accepts nothing and no third source is ever queued. Expect n=2,
+    //       terminating on max-iterations, with one ITERATION_INTERVAL sleep
+    //       between the two: ~19min wall clock, report by ~04:20 local.
+    //       UNVERIFIED — the one-seed shape was measured 7/7 over
+    //       2026-08-27..09-02 at n=1 in ~40s; the second seed was added
+    //       2026-09-03 and has not run yet. Confirm against the first
+    //       two-source run before relying on this.
     "crons": ["*/30 * * * *", "0 15 * * *", "0 16 * * *"]
   },
 
