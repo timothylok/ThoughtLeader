@@ -1,0 +1,31 @@
+{
+  "run": {
+    "id": "e51ea6ea",
+    "topic": "Australian and New Zealand AI and tech funding: track new events daily and flag divergence from the baseline.",
+    "goals": "[\"Record every new AI or tech funding event in today's sources: company, sector, amount, stage, investors, date, COUNTRY. Report only events not already in the ledger. State the country only where the material says or clearly implies it — a 'Kiwi' startup or one based in Auckland is New Zealand; Sydney, Melbourne, Brisbane, Perth and Canberra are Australia. Where it does not, write '-'. Do not infer a country from the publication.\",\"Flag where today's events diverge from the baseline's SECTOR taxonomy: a funded company whose sector maps onto NONE of the taxonomy's rows. A sector that maps onto a row under a different name is not a divergence — the test is 'does not map', not 'is not listed verbatim'. ONLY for companies in the country the baseline covers: it is an Australian baseline, so a New Zealand or other company diverges from nothing and must not be flagged. Do NOT judge round size: code checks that against the baseline's own flag table. Do NOT flag investors: the baseline ranks none, so an unfamiliar investor is evidence of nothing.\"]",
+    "status": "done",
+    "reason": "max-iterations",
+    "iterations": 1,
+    "max_iterations": 1,
+    "report": "## New events\n**Australia**\n* MP Space — satellite batteries, $23 million, Seed, Mon, 26 Oct 2026 https://startupdaily.net/feed\n\n**Country not stated**\n* Forward Deployed — chemical threat detection, $1 million, Tue, 27 Oct 2026 https://startupdaily.net/feed\n\n## Round size vs baseline (B3)\n* Forward Deployed — $1 million (Country not stated): NOT MEASURED — the baseline covers Australia only.\n* MP Space — $23 million (Seed): **ABOVE** the $12.0M flag for Seed.\n\n## Divergence from baseline\nNone.",
+    "created_at": 1793113210797,
+    "updated_at": 1793113245684
+  },
+  "findings": [
+    {
+      "n": 1,
+      "source_url": "https://startupdaily.net/feed",
+      "finding": "Forward Deployed, a chemical threat detection startup, received $1 million in funding (https://startupdaily.net/feed), and MP Space, a satellite batteries startup, raised $23 million in a Seed round (https://startupdaily.net/feed). Incaberry burned $300,000 (https://startupdaily.net/feed). No other funding events were recorded. The baseline covers Australian tech and AI funding, and these events do not diverge from the sector taxonomy (https://startupdaily.net/feed).",
+      "progress": "Goal 1 is partially answered, with two new funding events recorded. Goal 2 is also partially answered, with no divergence from the sector taxonomy found."
+    }
+  ],
+  "sources": [
+    {
+      "url": "https://startupdaily.net/feed",
+      "status": "fetched",
+      "chunks": 11,
+      "depth": 0,
+      "error": null
+    }
+  ]
+}

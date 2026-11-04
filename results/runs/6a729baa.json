@@ -1,0 +1,31 @@
+{
+  "run": {
+    "id": "6a729baa",
+    "topic": "Australian and New Zealand AI and tech funding: track new events daily and flag divergence from the baseline.",
+    "goals": "[\"Record every new AI or tech funding event in today's sources: company, sector, amount, stage, investors, date, COUNTRY. Report only events not already in the ledger. State the country only where the material says or clearly implies it — a 'Kiwi' startup or one based in Auckland is New Zealand; Sydney, Melbourne, Brisbane, Perth and Canberra are Australia. Where it does not, write '-'. Do not infer a country from the publication.\",\"Flag where today's events diverge from the baseline's SECTOR taxonomy: a funded company whose sector maps onto NONE of the taxonomy's rows. A sector that maps onto a row under a different name is not a divergence — the test is 'does not map', not 'is not listed verbatim'. ONLY for companies in the country the baseline covers: it is an Australian baseline, so a New Zealand or other company diverges from nothing and must not be flagged. Do NOT judge round size: code checks that against the baseline's own flag table. Do NOT flag investors: the baseline ranks none, so an unfamiliar investor is evidence of nothing.\"]",
+    "status": "done",
+    "reason": "max-iterations",
+    "iterations": 1,
+    "max_iterations": 1,
+    "report": "## New events\n**Country not stated**\n* Vinyl Chair — $2 million, Ken Gaunt https://startupdaily.net/feed\n* Alchemy Charge — Climate Tech, $2 million, ARENA https://startupdaily.net/feed\n\n## Round size vs baseline (B3)\n* Vinyl Chair — $2 million (Country not stated): NOT MEASURED — the baseline covers Australia only.\n* Alchemy Charge — $2 million (Country not stated): NOT MEASURED — the baseline covers Australia only.\n\n## Divergence from baseline\nNone.",
+    "created_at": 1793286062641,
+    "updated_at": 1793286086117
+  },
+  "findings": [
+    {
+      "n": 1,
+      "source_url": "https://startupdaily.net/feed",
+      "finding": "Vinyl Chair received a $2 million loan (https://startupdaily.net/feed), and Alchemy Charge received $2 million in funding from ARENA (https://startupdaily.net/feed).",
+      "progress": "Goal 1 is partially advanced, with two new funding events recorded. Goal 2 is not yet addressed as the sectors of the funded companies do not diverge from the baseline's taxonomy."
+    }
+  ],
+  "sources": [
+    {
+      "url": "https://startupdaily.net/feed",
+      "status": "fetched",
+      "chunks": 12,
+      "depth": 0,
+      "error": null
+    }
+  ]
+}

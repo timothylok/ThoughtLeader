@@ -1,0 +1,22 @@
+{
+  "topic": "The Australian AI startup ecosystem in 2026: who the companies are, which sectors they cluster in, how they are funded, and what distinguishes AI-native companies from AI-enabled incumbents.",
+  "goals": [
+    "Identify the main sectors where Australian AI startups concentrate, and which are growing fastest",
+    "Establish how AI-native companies are distinguished from AI-enabled incumbents, and how the ecosystem splits between them",
+    "Map the funding landscape: most active investors in Australian AI, typical stages, and notable recent rounds",
+    "Identify the geographic clusters (Sydney, Melbourne, Brisbane, Perth) and what differentiates them",
+    "Surface named example companies for each major sector, with sources"
+  ],
+  "sources": [
+    "https://smallbizai.au/australian-ai-companies-complete-guide-by-industry-2026/",
+    "https://en.wikipedia.org/wiki/Science_and_technology_in_Australia",
+    "https://www.csiro.au/en/research/technology-space/ai",
+    "https://www.startmate.com/portfolio",
+    "https://www.cutthroughventure.com/reports",
+    "https://www.startupdaily.net/",
+    "https://www.innovationaus.com/",
+    "https://blackbird.vc/portfolio",
+    "https://techcouncil.com.au/"
+  ],
+  "maxIterations": 12
+}
