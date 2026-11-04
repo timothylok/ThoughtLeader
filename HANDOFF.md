@@ -1,3 +1,37 @@
+# Session handoff — session 15, 2026-11-04: PROJECT CLOSED
+
+**The Cloudflare side of this project was shut down on 2026-11-04 at the user's request
+("closing this project"). Nothing is running. Do not redeploy without being asked.**
+
+## What was removed (verified by command, not by the delete tool's say-so)
+
+| Resource | Action | Evidence |
+|---|---|---|
+| Worker `research-loop` (incl. its 3 cron triggers and the `CONTROL_TOKEN` / `ALERT_WEBHOOK` secrets) | `wrangler delete` | account Workers API lists `result: []`; Worker URL returns 404 |
+| Workflow `research-loop` | `wrangler workflows delete` | still listed after the Worker delete — removed separately; list now empty |
+| D1 `research-log` | `wrangler d1 delete` | success message only; not re-listed |
+| Vectorize `research-memory` | `wrangler vectorize delete` | success message only; not re-listed. **No export exists** — vectors are gone |
+
+No run was in flight (`/state` showed 0 running) before the delete, per CLAUDE.md §7.1.
+
+## Where the data is
+
+Committed and pushed to `main` (`b005ec5`, `8060495`):
+
+- `results/live/` — `/state`, `/usage`, `/events` (limit 500), `/baseline` as served on 2026-11-04
+- `results/runs/` — per-run detail for all 20 runs (run, findings, sources)
+- `results/research-log-d1-export.sql` — full D1 export, 1,127 INSERT rows, taken **before** deletion
+- `results/local/` — copies of `benchmark/`, `baseline/`, `liverun.html`, `feed.xml` (0 bytes)
+
+## State of the repo
+
+Code is as of session 14's last deploy (`9f7ed35c`, 112/112 tests). Session 14's open
+items below are **moot** — the loop no longer exists. To revive: recreate D1 from the
+SQL export and `schema.sql`, create a new Vectorize index (memory vectors are not
+recoverable; re-ingest), set the secrets, then deploy.
+
+---
+
 # Session handoff — session 14, 2026-09-03
 
 ## Where things stand — 2026-09-03 15:41 NZST
